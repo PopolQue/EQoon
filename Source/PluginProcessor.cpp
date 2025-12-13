@@ -9,8 +9,8 @@ void updateCoefficients(Coefficients& old, const Coefficients& replacements)
 
 
 
-EQoonAudioProcessor::EQoonAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
+EQoonAudioProcessor::EQoonAudioProcessor()
      : AudioProcessor (BusesProperties()
                      #if ! JucePlugin_IsMidiEffect
                       #if ! JucePlugin_IsSynth
@@ -18,9 +18,11 @@ EQoonAudioProcessor::EQoonAudioProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
-#endif
+                       ),
+        apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
+    // Initialize FFT analyzer
+    fftAnalyzer = std::make_unique<FFTAnalyzer>();
 }
 
 EQoonAudioProcessor::~EQoonAudioProcessor()
@@ -89,10 +91,16 @@ void EQoonAudioProcessor::changeProgramName (int index, const juce::String& newN
 
 void EQoonAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    // Use this method as the place to do any pre-playback
+    // initialisation that you need..
+    
     juce::dsp::ProcessSpec spec;
-    spec.sampleRate = sampleRate;
     spec.maximumBlockSize = samplesPerBlock;
-    spec.numChannels = getTotalNumOutputChannels();
+    spec.sampleRate = sampleRate;
+    spec.numChannels = 1;
+    
+    // Prepare FFT analyzer
+    fftAnalyzer->prepare(sampleRate);
 
     leftChain.prepare(spec);
     rightChain.prepare(spec);
@@ -131,20 +139,37 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
+    // Clear any output channels that didn't contain input data
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Update filters if needed
     updateFilters();
 
-    juce::dsp::AudioBlock<float> block(buffer);
+    // Create audio blocks for processing
+    auto block = juce::dsp::AudioBlock<float>(buffer);
     auto leftBlock = block.getSingleChannelBlock(0);
-    auto rightBlock = block.getSingleChannelBlock(1);
+    auto rightBlock = totalNumInputChannels > 1 ? block.getSingleChannelBlock(1) : leftBlock;
 
+    // Process left channel
     juce::dsp::ProcessContextReplacing<float> leftContext(leftBlock);
-    juce::dsp::ProcessContextReplacing<float> rightContext(rightBlock);
-
     leftChain.process(leftContext);
-    rightChain.process(rightContext);
+
+    // Process right channel if stereo
+    if (totalNumInputChannels > 1) {
+        juce::dsp::ProcessContextReplacing<float> rightContext(rightBlock);
+        rightChain.process(rightContext);
+    }
+    
+    // For FFT analysis (use left channel only)
+    if (totalNumInputChannels > 0) {
+        auto* channelData = buffer.getReadPointer(0);
+        for (int i = 0; i < buffer.getNumSamples(); ++i) {
+            if (fftAnalyzer) {
+                fftAnalyzer->processSample(channelData[i]);
+            }
+        }
+    }
 }
 
 bool EQoonAudioProcessor::hasEditor() const
@@ -382,7 +407,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
     return layout;
 }
 
+// FFT analysis is now handled by the FFTAnalyzer class
+
+//==============================================================================
+// This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new EQoonAudioProcessor();
 }
+
+#endif // JucePlugin_PreferredChannelConfigurations

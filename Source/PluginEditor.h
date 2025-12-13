@@ -2,6 +2,8 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include <mutex>
+#include <vector>
 
 struct CustomRotarySlider : juce::Slider
 {
@@ -22,8 +24,16 @@ struct ResponseCurveComponent : juce::Component,
     void parameterGestureChanged(int parameterIndex, bool gestureIsStarting) override {}
     void timerCallback() override;
     void paint(juce::Graphics& g) override;
+    
+    // For FFT analysis
+    void drawFFTAnalysis(juce::Graphics& g, juce::Rectangle<int> bounds);
 
 private:
+
+    juce::Image fftImage;
+    std::mutex fftMutex;
+    double lastUpdateTime = 0.0;
+    const double minFrameTime = 1.0 / 30.0; // 30 FPS max
     EQoonAudioProcessor& audioProcessor;
     juce::Atomic<bool> parametersChanged{false};
     MonoChain monoChain;
@@ -40,6 +50,8 @@ public:
 
 private:
     EQoonAudioProcessor& audioProcessor;
+    
+    // Sliders
     CustomRotarySlider lowCutFreqSlider, lowCutSlopeSlider, lowCutQualitySlider;
     CustomRotarySlider lowShelfFreqSlider, lowShelfGainSlider, lowShelfQualitySlider;
     CustomRotarySlider peakFreq1Slider, peakGain1Slider, peakQuality1Slider;
@@ -47,6 +59,47 @@ private:
     CustomRotarySlider peakFreq3Slider, peakGain3Slider, peakQuality3Slider;
     CustomRotarySlider highShelfFreqSlider, highShelfGainSlider, highShelfQualitySlider;
     CustomRotarySlider highCutFreqSlider, highCutSlopeSlider, highCutQualitySlider;
+    
+    // Labels for sliders
+    // Filter name labels
+    juce::Label lowCutNameLabel, lowShelfNameLabel, peak1NameLabel, peak2NameLabel, 
+                peak3NameLabel, highShelfNameLabel, highCutNameLabel;
+    
+    // Parameter labels (on the left)
+    juce::Label lowCutFreqLabel, lowCutSlopeLabel, lowCutQualityLabel;
+    juce::Label lowShelfFreqLabel, lowShelfGainLabel, lowShelfQualityLabel;
+    juce::Label peakFreq1Label, peakGain1Label, peakQuality1Label;
+    juce::Label peakFreq2Label, peakGain2Label, peakQuality2Label;
+    juce::Label peakFreq3Label, peakGain3Label, peakQuality3Label;
+    juce::Label highShelfFreqLabel, highShelfGainLabel, highShelfQualityLabel;
+    juce::Label highCutFreqLabel, highCutSlopeLabel, highCutQualityLabel;
+    
+    // Value display labels (on the right of sliders)
+    juce::Label lowCutFreqValue, lowCutSlopeValue, lowCutQualityValue;
+    juce::Label lowShelfFreqValue, lowShelfGainValue, lowShelfQualityValue;
+    juce::Label peakFreq1Value, peakGain1Value, peakQuality1Value;
+    juce::Label peakFreq2Value, peakGain2Value, peakQuality2Value;
+    juce::Label peakFreq3Value, peakGain3Value, peakQuality3Value;
+    juce::Label highShelfFreqValue, highShelfGainValue, highShelfQualityValue;
+    juce::Label highCutFreqValue, highCutSlopeValue, highCutQualityValue;
+    
+    // Band names
+    static constexpr int numBands = 7;
+    const juce::String bandNames[numBands] = {"HPF", "Low Shelf", "Peak 1", "Peak 2", "Peak 3", "High Shelf", "LPF"};
+    
+    // Row bounds for drawing
+    juce::Array<juce::Rectangle<int>> bandRows;
+    
+    // Helper functions
+    void positionBandRow(juce::Rectangle<int> bounds,
+                       juce::Slider& freqSlider, juce::Slider& gainSlider, juce::Slider& qSlider,
+                       juce::Label& freqLabel, juce::Label& gainLabel, juce::Label& qLabel,
+                       juce::Label& freqValue, juce::Label& gainValue, juce::Label& qValue,
+                       juce::Label& nameLabel);
+    
+    void setupLabel(juce::Label& label, const juce::String& text);
+    
+    void drawBandRow(juce::Graphics& g, int bandIndex, const juce::Rectangle<int>& bounds);
     ResponseCurveComponent responseCurveComponent;
 
     using APVTS = juce::AudioProcessorValueTreeState;
@@ -60,7 +113,7 @@ private:
     Attachment highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
 
     std::vector<juce::Component*> getComps();
+    std::vector<juce::Component*> getValueLabels();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EQoonAudioProcessorEditor)
 };
-
