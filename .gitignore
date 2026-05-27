@@ -2,3 +2,7 @@
 **/JuceLibraryCode
 **/.DS_Store
 doc.md
+install.sh
+**/SpectrumAnalyser
+**/inspo
+**/.vscode

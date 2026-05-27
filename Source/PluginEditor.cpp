@@ -1,6 +1,12 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+class EQoonUnitTestRunner
+{
+public:
+    static void runAll();
+};
+
 ResponseCurveComponent::ResponseCurveComponent(EQoonAudioProcessor& p) : audioProcessor(p)
 {
     const auto& params = audioProcessor.getParameters();
@@ -11,8 +17,7 @@ ResponseCurveComponent::ResponseCurveComponent(EQoonAudioProcessor& p) : audioPr
     
     // Reduced update rate to 30 FPS for better performance
     startTimerHz(30);
-    
-    // FFT data is now managed by the processor
+    parametersChanged.set(true);
 }
 
 ResponseCurveComponent::~ResponseCurveComponent()
@@ -31,10 +36,8 @@ void ResponseCurveComponent::parameterValueChanged(int parameterIndex, float new
 
 void ResponseCurveComponent::timerCallback()
 {
-    static int frameCounter = 0;
     bool needsUpdate = parametersChanged.exchange(false);
     
-    // Only update filter coefficients if they've changed
     if (needsUpdate)
     {
         auto chainSettings = getChainSettings(audioProcessor.apvts);
@@ -59,287 +62,104 @@ void ResponseCurveComponent::timerCallback()
         updateCoefficients(monoChain.get<ChainPositions::LowShelf>().coefficients, lowShelfCoefficients);
         updateCoefficients(monoChain.get<ChainPositions::HighShelf>().coefficients, highShelfCoefficients);
     }
+
+    const int displayPoints = juce::jmax(2, getWidth());
+    if ((int) preEQFFTData.size() != displayPoints)
+        preEQFFTData.assign((size_t) displayPoints, 0.0f);
+
+    if ((int) postEQFFTData.size() != displayPoints)
+        postEQFFTData.assign((size_t) displayPoints, 0.0f);
+
+    const auto sampleRate = static_cast<float>(audioProcessor.getSampleRate());
+    audioProcessor.getPreEQFFTData(preEQFFTData.data(), displayPoints, sampleRate);
+    audioProcessor.getPostEQFFTData(postEQFFTData.data(), displayPoints, sampleRate);
     
-    // Only repaint every other frame (15 FPS for FFT)
-    if (frameCounter++ % 2 == 0) {
-        repaint();
+    repaint();
+}
+
+void ResponseCurveComponent::drawSpectrumPath(juce::Graphics& g,
+                                              juce::Rectangle<int> bounds,
+                                              const std::vector<float>& fftData,
+                                              juce::Colour lineColour,
+                                              juce::Colour fillColour,
+                                              float strokeWidth)
+{
+    using namespace juce;
+
+    if (fftData.empty())
+        return;
+
+    const int displayPoints = juce::jmin((int) fftData.size(), juce::jmax(2, bounds.getWidth()));
+
+    Path fftPath;
+    const float top = 1.0f;
+    const float bottom = (float) bounds.getHeight() - 1.0f;
+    const float height = bottom - top;
+
+    for (int i = 0; i < displayPoints; ++i)
+    {
+        const float normalisedX = (float) i / (float) juce::jmax(1, displayPoints - 1);
+        const float x = normalisedX * (float) bounds.getWidth();
+        const float magnitude = std::pow(juce::jlimit(0.0f, 1.0f, fftData[(size_t) i]), 0.72f);
+        const float y = juce::jmap(magnitude, 0.0f, 1.0f, bottom, top + height * 0.08f);
+
+        if (i == 0)
+            fftPath.startNewSubPath(x, y);
+        else
+            fftPath.lineTo(x, y);
     }
+
+    Path filledPath(fftPath);
+    filledPath.lineTo((float) bounds.getWidth(), (float) bounds.getHeight());
+    filledPath.lineTo(0.0f, (float) bounds.getHeight());
+    filledPath.closeSubPath();
+
+    g.setGradientFill(ColourGradient(fillColour, 0.0f, 0.0f,
+                                     fillColour.withAlpha(0.0f), 0.0f, (float) bounds.getHeight(),
+                                     false));
+    g.fillPath(filledPath);
+
+    g.setColour(lineColour.withAlpha(0.22f));
+    g.strokePath(fftPath, PathStrokeType(strokeWidth + 2.0f));
+    g.setColour(lineColour);
+    g.strokePath(fftPath, PathStrokeType(strokeWidth));
 }
 
 void ResponseCurveComponent::drawFFTAnalysis(juce::Graphics& g, juce::Rectangle<int> bounds)
 {
     using namespace juce;
-    
-    // Limit update rate
-    double currentTime = Time::getMillisecondCounterHiRes() / 1000.0;
-    if (currentTime - lastUpdateTime < minFrameTime) {
-        // Just draw the last frame if not enough time has passed
-        if (fftImage.isValid()) {
-            g.drawImageAt(fftImage, bounds.getX(), bounds.getY());
-        }
+
+    if (preEQFFTData.empty() && postEQFFTData.empty())
         return;
-    }
-    lastUpdateTime = currentTime;
-    
-    // Increased FFT size for higher resolution visualization
-    const int fftSize = 4096;  // 4x more points for smoother visualization
-    std::vector<float> fftData(fftSize, 0.0f);
-    double sampleRate = 0.0;
-    
-    // Lock while accessing FFT data
-    {
-        std::lock_guard<std::mutex> lock(fftMutex);
-        sampleRate = audioProcessor.getSampleRate();
-        audioProcessor.getFFTData(bounds.toFloat(), fftData.data(), static_cast<float>(fftSize), static_cast<float>(sampleRate));
-    }
-    
-    // Create or update the FFT image if needed
+
     if (fftImage.getWidth() != bounds.getWidth() || fftImage.getHeight() != bounds.getHeight())
-    {
-        fftImage = juce::Image(juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
-    }
-    
-    // Draw to the image buffer
-    juce::Graphics g2(fftImage);
-    g2.setColour(Colours::transparentBlack);
-    g2.fillAll();
-    
-    // Debug: Print first few FFT values (less frequent to reduce console spam)
-    //static int debugCounter = 0;
-    //if (debugCounter++ % 60 == 0) {
-      //  DBG("FFT Values (first 5):");
-        //for (int i = 0; i < 5 && i < fftSize; ++i) {
-          //  DBG("  [" << i << "] = " << fftData[i]);
-        //}
-    //}
-    
-    // Apply scaling to make the curve more visible
-    for (auto& val : fftData) {
-        // Apply a non-linear scaling to make small values more visible
-        val = std::pow(val, 0.7f);
-        // Ensure minimum visibility but don't boost too much
-        val = juce::jmap(val, 0.0f, 1.0f, 0.1f, 1.0f);
-    }
-    
-    // Debug: Print frequency range info
-    static int debugCounter = 0;
-    if (debugCounter++ % 60 == 0) {
-        float minFreq = 0.0f;
-        float maxFreq = sampleRate * 0.5f; // Nyquist frequency
-        DBG("FFT Frequency range: " << minFreq << " Hz to " << maxFreq << " Hz");
-        DBG("Sample rate: " << sampleRate << ", FFT size: " << fftSize);
-    }
-    
-    // Set up the path for the FFT curve
-    Path fftPath;
-    bool started = false;
-    
-    // Frequency range (matching the grid)
-    const float minFreq = 20.0f;
-    const float maxFreq = 20000.0f;
-    
-    // Calculate the range of the view in pixels
-    const float viewHeight = (float)bounds.getHeight();
-    const float viewBottom = (float)bounds.getBottom();
-    
-    // Pre-calculate log values for frequency scaling
-    const float logMinFreq = std::log10(minFreq);
-    const float logMaxFreq = std::log10(maxFreq);
-    
-    // Calculate the FFT bin to frequency mapping
-    auto fftBinToFreq = [fftSize = fftSize, sampleRate](int bin) -> float {
-        // FFT bins are linearly spaced from 0 to Nyquist frequency
-        // Note: We only use the first half of the FFT (real FFT)
-        return bin * (sampleRate * 0.5f) / (fftSize / 2);
-    };
-    
-    // Calculate frequency to FFT bin mapping (inverse of the above)
-    auto freqToFFTBin = [fftSize = fftSize, sampleRate](float freq) -> float {
-        // Map frequency to bin number (can be fractional)
-        // Ensure we don't go beyond Nyquist frequency
-        float maxFreq = sampleRate * 0.5f;
-        float normalizedFreq = juce::jlimit(0.0f, maxFreq, freq) / maxFreq;
-        return normalizedFreq * (fftSize / 2);
-    };
-    
-    // Debug: Print frequency range info
-    static int fftDebugCounter = 0;
-    if (fftDebugCounter++ % 100 == 0) {
-        float minFreq = fftBinToFreq(0);
-        float maxFreq = fftBinToFreq(static_cast<int>(fftData.size()) / 2 - 1);
-        DBG("FFT Frequency range: " << minFreq << " Hz to " << maxFreq << " Hz");
-        DBG("Sample rate: " << audioProcessor.getSampleRate() << ", FFT size: " << fftSize);
-        
-        // Print some key frequencies
-        float testFreqs[] = {20.0f, 100.0f, 1000.0f, 5000.0f, 10000.0f, 15000.0f, 20000.0f};
-        for (float f : testFreqs) {
-            float bin = freqToFFTBin(f);
-            DBG(f << " Hz -> bin " << bin << " (" << fftBinToFreq(static_cast<int>(bin)) << " Hz)");
-        }
-    }
-    
-    // Debug: Print FFT data statistics
-    {
-        float maxVal = 0.0f;
-        int maxBin = 0;
-        for (int i = 0; i < fftSize/2; ++i) {
-            if (fftData[i] > maxVal) {
-                maxVal = fftData[i];
-                maxBin = i;
-            }
-        }
-        float maxFreq = fftBinToFreq(maxBin);
-        DBG("FFT Analysis - Peak at bin " << maxBin << " (" << maxFreq << " Hz) with value " << maxVal);
-    }
-    
-    // Draw the FFT curve
-    // Use one point per pixel for best quality
-    const int displayPoints = bounds.getWidth();
-    
-    // Debug: Print frequency range info
-    DBG("FFT Analysis:");
-    DBG("  Sample rate: " << sampleRate << " Hz");
-    DBG("  FFT size: " << fftSize);
-    DBG("  Nyquist frequency: " << (sampleRate * 0.5f) << " Hz");
-    DBG("  Display range: " << minFreq << " Hz to " << maxFreq << " Hz");
-    
-    // Print bin to frequency mapping for first 10 bins
-    DBG("First 10 FFT bins:");
-    for (int i = 0; i < 10; ++i) {
-        DBG("  Bin " << i << ": " << fftBinToFreq(i) << " Hz");
-    }
-    
-    // Pre-calculate log values for frequency scaling
-    const float logMin = std::log10(minFreq);
-    const float logMax = std::log10(maxFreq);
-    const float logRange = logMax - logMin;
-    
-    for (int i = 0; i <= displayPoints; ++i)
-    {
-        // Calculate x position in screen coordinates (0 to 1)
-        float normalizedX = i / (float)displayPoints;
-        
-        // Map x position to frequency (logarithmic scale)
-        float logFreq = logMin + normalizedX * logRange;
-        float freq = std::pow(10.0f, logFreq);
-        
-        // Map to screen x coordinate
-        float x = bounds.getX() + normalizedX * bounds.getWidth();
-        
-        // Find the corresponding FFT bin for this frequency
-        float bin = freqToFFTBin(freq);
-        int binLow = juce::jlimit(0, fftSize/2 - 1, static_cast<int>(std::floor(bin)));
-        int binHigh = juce::jlimit(0, fftSize/2 - 1, static_cast<int>(std::ceil(bin)));
-        float binFrac = bin - binLow;
-        
-        // Debug: Print specific frequency mapping
-        if (freq >= 30.0f && freq <= 40.0f) {
-            DBG(freq << " Hz -> bin " << bin << " (" << binLow << "-" << binHigh << ") - " 
-                << fftBinToFreq(binLow) << " Hz to " << fftBinToFreq(binHigh) << " Hz");
-        }
-        
-        // Debug: Print some key frequency points
-        if (i % (displayPoints/10) == 0 || i == displayPoints) {
-            DBG("  " << freq << " Hz -> bin " << bin << " (" << binLow << "-" << binHigh << ")");
-        }
-        
-        // Interpolate between bins for smoother visualization
-        float magnitude = 0.0f;
-        if (binLow == binHigh) {
-            magnitude = fftData[binLow];
-        } else {
-            magnitude = fftData[binLow] * (1.0f - binFrac) + fftData[binHigh] * binFrac;
-        }
-        
-        // Apply a gentle high shelf to make higher frequencies more visible
-        // but only a very slight boost to prevent distortion
-        float freqGain = 1.0f + (normalizedX * 0.2f); // Very slight boost to highs
-        magnitude = juce::jlimit(0.0f, 1.0f, magnitude * freqGain);
-        
-        // Map magnitude to y position with non-linear scaling for better visibility
-        float normalizedMagnitude = std::pow(magnitude, 0.7f); // Gamma correction
-        float y = viewBottom - (normalizedMagnitude * viewHeight * 0.9f) - (viewHeight * 0.05f);
-        
-        // Ensure y is within bounds
-        y = juce::jlimit(bounds.getY() + 1.0f, viewBottom - 1.0f, y);
-        
-        // Debug: Print the first few positions
-        if (i < 5) {
-            DBG("  x = " << x << ", y = " << y);
-        }
-        
-        // Add a point to the path
-        if (!started)
-        {
-            fftPath.startNewSubPath(x, y);
-            started = true;
-        }
-        else
-        {
-            // Add a small horizontal offset to prevent vertical lines when values change rapidly
-            float prevX = fftPath.getCurrentPosition().x;
-            if (x > prevX + 0.5f) {
-                fftPath.lineTo(x, y);
-            } else {
-                fftPath.lineTo(prevX + 0.5f, y);
-            }
-        }
-    }
-    
-    // Draw a solid fill under the curve for better visibility
-    juce::Path filledPath(fftPath);
-    filledPath.lineTo((float)bounds.getWidth(), (float)bounds.getHeight());
-    filledPath.lineTo(0.0f, (float)bounds.getHeight());
-    filledPath.closeSubPath();
-    
-    // Fill with a gradient that matches the EQ curve style
-    g2.setGradientFill(juce::ColourGradient(
-        juce::Colours::cyan.withAlpha(0.4f), 0, 0.0f,
-        juce::Colours::blue.withAlpha(0.2f), 0, (float)bounds.getHeight(),
-        false
-    ));
-    g2.fillPath(filledPath);
-    
-    // Draw the FFT curve with a gradient
-    g2.setGradientFill(juce::ColourGradient(
-        juce::Colours::cyan, 0, 0.0f,
-        juce::Colours::blue, 0, (float)bounds.getHeight(),
-        false
-    ));
-    g2.strokePath(fftPath, juce::PathStrokeType(2.5f));
-    
-    // Draw a subtle glow effect
-    g2.setColour(juce::Colours::white.withAlpha(0.3f));
-    g2.strokePath(fftPath, juce::PathStrokeType(4.0f));
-    
-    // Draw a thin white highlight on top
-    g2.setColour(juce::Colours::white.withAlpha(0.5f));
-    g2.strokePath(fftPath, juce::PathStrokeType(1.0f));
-    
-    // Draw the buffered image to the screen
+        fftImage = Image(Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+
+    Graphics g2(fftImage);
+    g2.fillAll(Colours::transparentBlack);
+
+    drawSpectrumPath(g2,
+                     bounds.withPosition(0, 0),
+                     preEQFFTData,
+                     Colours::orange.withAlpha(0.58f),
+                     Colours::orange.withAlpha(0.12f),
+                     1.3f);
+
+    drawSpectrumPath(g2,
+                     bounds.withPosition(0, 0),
+                     postEQFFTData,
+                     Colours::cyan.withAlpha(0.85f),
+                     Colours::cyan.withAlpha(0.22f),
+                     1.8f);
+
+    auto legendBounds = juce::Rectangle<int>(bounds.getWidth() - 130, 8, 120, 36);
+    g2.setFont(juce::Font(juce::FontOptions { 12.0f, juce::Font::bold }));
+    g2.setColour(Colours::orange.withAlpha(0.75f));
+    g2.drawText("PRE", legendBounds.removeFromTop(16), Justification::centredRight);
+    g2.setColour(Colours::cyan.withAlpha(0.9f));
+    g2.drawText("POST", legendBounds.removeFromTop(16), Justification::centredRight);
+
     g.drawImageAt(fftImage, bounds.getX(), bounds.getY());
-    
-    // If in test mode, show the current frequency
-    if (!audioProcessor.isFFTDataReady()) {
-        // Calculate current test frequency
-        float logMinFreq = std::log10(20.0f);
-        float logMaxFreq = std::log10(20000.0f);
-        float logSweepPos = 0.5f * (1.0f + std::sin(audioProcessor.getTestCounter() * 0.01f));
-        float testFreq = std::pow(10.0f, logMinFreq + (logMaxFreq - logMinFreq) * logSweepPos);
-        
-        // Format frequency text
-        juce::String freqText;
-        if (testFreq < 1000.0f)
-            freqText = juce::String(testFreq, 1) + " Hz";
-        else
-            freqText = juce::String(testFreq / 1000.0f, 1) + " kHz";
-        
-        // Draw frequency display
-        g.setColour(juce::Colours::white);
-        auto font = juce::Font(juce::FontOptions{}.withHeight(14.0f));
-        g.setFont(font);
-        g.drawText(freqText, bounds.getX() + 10, bounds.getY() + 10, 100, 20, juce::Justification::left);
-    }
 }
 
 void ResponseCurveComponent::paint(juce::Graphics& g)
@@ -349,11 +169,6 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     auto bounds = getLocalBounds();
     g.fillAll(Colours::black);
     
-    // Draw a debug background for the FFT area
-    g.setColour(Colours::red.withAlpha(0.1f));
-    g.fillRect(bounds);
-    
-    // Draw the FFT analysis in the background with a debug border
     {
         g.saveState();
         g.reduceClipRegion(bounds);
@@ -442,38 +257,47 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
 
     for (int i = 0; i < w; ++i)
     {
-        double mag = 1.f;
         auto freq = mapToLog10(double(i) / double(w), 20.0, 20000.0);
 
-        if (!monoChain.isBypassed<ChainPositions::Peak1>())
-            mag *= peak1.coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!monoChain.isBypassed<ChainPositions::Peak2>())
-            mag *= peak2.coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!monoChain.isBypassed<ChainPositions::Peak3>())
-            mag *= peak3.coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!monoChain.isBypassed<ChainPositions::LowShelf>())
-            mag *= lowShelf.coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!monoChain.isBypassed<ChainPositions::HighShelf>())
-            mag *= highShelf.coefficients->getMagnitudeForFrequency(freq, sampleRate);
-
+        double cutMag = 1.0;
         if (!lowcut.isBypassed<0>())
-            mag *= lowcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= lowcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!lowcut.isBypassed<1>())
-            mag *= lowcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= lowcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!lowcut.isBypassed<2>())
-            mag *= lowcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= lowcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!lowcut.isBypassed<3>())
-            mag *= lowcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= lowcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
 
         if (!highcut.isBypassed<0>())
-            mag *= highcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= highcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!highcut.isBypassed<1>())
-            mag *= highcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= highcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!highcut.isBypassed<2>())
-            mag *= highcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= highcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!highcut.isBypassed<3>())
-            mag *= highcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            cutMag *= highcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
 
+        // Display response: cascaded product of all bands (matches knob settings)
+        // regardless of summing mode (which only affects the audio path)
+        double bandMag = 1.0;
+        auto collectAndMultiply = [&](const Coefficients& coeffs) {
+            if (coeffs != nullptr)
+                bandMag *= coeffs->getMagnitudeForFrequency(freq, sampleRate);
+        };
+
+        if (!monoChain.isBypassed<ChainPositions::LowShelf>())
+            collectAndMultiply(lowShelf.coefficients);
+        if (!monoChain.isBypassed<ChainPositions::Peak1>())
+            collectAndMultiply(peak1.coefficients);
+        if (!monoChain.isBypassed<ChainPositions::Peak2>())
+            collectAndMultiply(peak2.coefficients);
+        if (!monoChain.isBypassed<ChainPositions::Peak3>())
+            collectAndMultiply(peak3.coefficients);
+        if (!monoChain.isBypassed<ChainPositions::HighShelf>())
+            collectAndMultiply(highShelf.coefficients);
+
+        double mag = cutMag * bandMag;
         mags[i] = Decibels::gainToDecibels(mag);
     }
 
@@ -531,27 +355,60 @@ EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
         highShelfQualitySliderAttachment(audioProcessor.apvts, "HighShelf Quality", highShelfQualitySlider),
         highCutFreqSliderAttachment(audioProcessor.apvts, "HighCut Freq", highCutFreqSlider),
         highCutSlopeSliderAttachment(audioProcessor.apvts, "HighCut Slope", highCutSlopeSlider),
-          highCutQualitySliderAttachment(audioProcessor.apvts, "HighCut Quality", highCutQualitySlider)
+          highCutQualitySliderAttachment(audioProcessor.apvts, "HighCut Quality", highCutQualitySlider),
+        makeupGainSliderAttachment(audioProcessor.apvts, "Makeup Gain", makeupGainSlider),
+        summingModeAttachment(audioProcessor.apvts, "Summing Mode", summingModeCombo)
 {
+    summingModeCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colours::black);
+    summingModeCombo.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+    summingModeCombo.setColour(juce::ComboBox::outlineColourId, juce::Colours::white.withAlpha(0.3f));
+    summingModeCombo.setColour(juce::ComboBox::buttonColourId, juce::Colours::white.withAlpha(0.5f));
+    summingModeCombo.setColour(juce::ComboBox::arrowColourId, juce::Colours::white.withAlpha(0.6f));
+    summingModeCombo.setJustificationType(juce::Justification::centred);
+    if (summingModeCombo.getNumItems() < 3)
+    {
+        summingModeCombo.clear();
+        summingModeCombo.addItemList({ "Average", "Sum", "Maximum" }, 1);
+    }
+    summingModeCombo.setSelectedItemIndex(static_cast<int>(audioProcessor.apvts.getRawParameterValue("Summing Mode")->load()), juce::dontSendNotification);
+
     for (auto* comp : getComps())
     {
         addAndMakeVisible(comp);
     }
-    setSize(1000, 600);
+    setWantsKeyboardFocus(true);
+    setSize(1000, 650);
 }
 
 EQoonAudioProcessorEditor::~EQoonAudioProcessorEditor()
 {
 }
 
+bool EQoonAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress('t', juce::ModifierKeys::commandModifier, 0))
+    {
+        DBG("Running EQoon unit tests...");
+        EQoonUnitTestRunner::runAll();
+        DBG("Tests complete.");
+        return true;
+    }
+    return false;
+}
+
 void EQoonAudioProcessorEditor::paint(juce::Graphics& g)
 {
     g.fillAll(getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId));
     
-    // Draw each band row
     for (int i = 0; i < bandRows.size(); ++i)
-    {
         drawBandRow(g, i, bandRows[i]);
+
+    if (!makeupRowBounds.isEmpty())
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.07f));
+        g.fillRect(makeupRowBounds);
+        g.setColour(juce::Colours::white.withAlpha(0.15f));
+        g.drawRect(makeupRowBounds, 1);
     }
 }
 
@@ -560,7 +417,7 @@ void EQoonAudioProcessorEditor::setupLabel(juce::Label& label, const juce::Strin
     label.setText(text, juce::dontSendNotification);
     label.setColour(juce::Label::textColourId, juce::Colours::white);
     label.setJustificationType(juce::Justification::centredRight);
-    auto font = juce::Font(juce::FontOptions{}.withHeight(12.0f).withStyle(juce::Font::bold));
+    auto font = juce::Font(juce::FontOptions{}.withHeight(12.0f).withStyle("Bold"));
     label.setFont(font);
     addAndMakeVisible(label);
 }
@@ -685,21 +542,17 @@ void EQoonAudioProcessorEditor::resized()
     auto responseArea = bounds.removeFromTop(bounds.getHeight() * 0.5);
     responseCurveComponent.setBounds(responseArea);
     
-    // Define the number of bands
     const int numBands = 7;
     
-    // Calculate row height
-    auto rowHeight = bounds.getHeight() / numBands;
+    auto rowHeight = bounds.getHeight() / (numBands + 1);
     
-    // Setup each band row in the paint method
-    // We'll store the row bounds for later use in paint()
     bandRows.clear();
     for (int i = 0; i < numBands; ++i)
     {
         bandRows.add(bounds.removeFromTop(rowHeight));
     }
+    auto makeupRow = bounds; // remaining space is the 8th row
     
-    // Setup all labels and value displays
     // Setup filter name labels
     setupLabel(lowCutNameLabel, "HPF");
     setupLabel(lowShelfNameLabel, "Low Shelf");
@@ -744,47 +597,77 @@ void EQoonAudioProcessorEditor::resized()
     setupLabel(highCutSlopeLabel, "Slope");
     setupLabel(highCutQualityLabel, "Q");
     
-    // Setup value displays (no text, they'll be set by positionBandRow)
+    // Makeup Gain Row
+    setupLabel(makeupGainLabel, "Gain");
+
     for (auto* comp : getValueLabels())
     {
         addAndMakeVisible(comp);
     }
-    
-    // Position all components
+
     positionBandRow(bandRows[0], lowCutFreqSlider, lowCutSlopeSlider, lowCutQualitySlider,
                    lowCutFreqLabel, lowCutSlopeLabel, lowCutQualityLabel,
                    lowCutFreqValue, lowCutSlopeValue, lowCutQualityValue,
                    lowCutNameLabel);
-    
+
     positionBandRow(bandRows[1], lowShelfFreqSlider, lowShelfGainSlider, lowShelfQualitySlider,
                    lowShelfFreqLabel, lowShelfGainLabel, lowShelfQualityLabel,
                    lowShelfFreqValue, lowShelfGainValue, lowShelfQualityValue,
                    lowShelfNameLabel);
-    
+
     positionBandRow(bandRows[2], peakFreq1Slider, peakGain1Slider, peakQuality1Slider,
                    peakFreq1Label, peakGain1Label, peakQuality1Label,
                    peakFreq1Value, peakGain1Value, peakQuality1Value,
                    peak1NameLabel);
-    
+
     positionBandRow(bandRows[3], peakFreq2Slider, peakGain2Slider, peakQuality2Slider,
                    peakFreq2Label, peakGain2Label, peakQuality2Label,
                    peakFreq2Value, peakGain2Value, peakQuality2Value,
                    peak2NameLabel);
-    
+
     positionBandRow(bandRows[4], peakFreq3Slider, peakGain3Slider, peakQuality3Slider,
                    peakFreq3Label, peakGain3Label, peakQuality3Label,
                    peakFreq3Value, peakGain3Value, peakQuality3Value,
                    peak3NameLabel);
-    
+
     positionBandRow(bandRows[5], highShelfFreqSlider, highShelfGainSlider, highShelfQualitySlider,
                    highShelfFreqLabel, highShelfGainLabel, highShelfQualityLabel,
                    highShelfFreqValue, highShelfGainValue, highShelfQualityValue,
                    highShelfNameLabel);
-    
+
     positionBandRow(bandRows[6], highCutFreqSlider, highCutSlopeSlider, highCutQualitySlider,
                    highCutFreqLabel, highCutSlopeLabel, highCutQualityLabel,
                    highCutFreqValue, highCutSlopeValue, highCutQualityValue,
                    highCutNameLabel);
+
+    makeupRowBounds = makeupRow;
+
+    auto positionMakeupRow = [&]()
+    {
+        int nameWidth = 80;
+        int labelWidth = 40;
+        int valueWidth = 60;
+        int padding = 1;
+
+        auto area = makeupRow;
+        auto comboArea = area.removeFromLeft(nameWidth + labelWidth);
+        summingModeCombo.setBounds(comboArea.reduced(2, 4));
+
+        auto valueArea = area.removeFromRight(valueWidth);
+        makeupGainValue.setBounds(valueArea.reduced(0, 1));
+
+        makeupGainSlider.setBounds(area.reduced(padding, 1));
+
+        makeupGainSlider.onValueChange = [this] {
+            makeupGainValue.setText(
+                juce::String(makeupGainSlider.getValue(), 1) + " dB",
+                juce::dontSendNotification);
+        };
+        makeupGainValue.setText(
+            juce::String(makeupGainSlider.getValue(), 1) + " dB",
+            juce::dontSendNotification);
+    };
+    positionMakeupRow();
 }
 
 
@@ -799,6 +682,7 @@ std::vector<juce::Component*> EQoonAudioProcessorEditor::getComps()
         &lowCutQualitySlider, &highCutQualitySlider,
         &lowShelfFreqSlider, &lowShelfGainSlider, &lowShelfQualitySlider,
         &highShelfFreqSlider, &highShelfGainSlider, &highShelfQualitySlider,
+        &makeupGainSlider,
         
         // Labels
         &peakFreq1Label, &peakGain1Label, &peakQuality1Label,
@@ -808,7 +692,9 @@ std::vector<juce::Component*> EQoonAudioProcessorEditor::getComps()
         &lowCutQualityLabel, &highCutQualityLabel,
         &lowShelfFreqLabel, &lowShelfGainLabel, &lowShelfQualityLabel,
         &highShelfFreqLabel, &highShelfGainLabel, &highShelfQualityLabel,
+        &makeupGainLabel,
         
+        &summingModeCombo,
         &responseCurveComponent
     };
 }
@@ -822,6 +708,7 @@ std::vector<juce::Component*> EQoonAudioProcessorEditor::getValueLabels()
         &peakFreq2Value, &peakGain2Value, &peakQuality2Value,
         &peakFreq3Value, &peakGain3Value, &peakQuality3Value,
         &highShelfFreqValue, &highShelfGainValue, &highShelfQualityValue,
-        &highCutFreqValue, &highCutSlopeValue, &highCutQualityValue
+        &highCutFreqValue, &highCutSlopeValue, &highCutQualityValue,
+        &makeupGainValue
     };
 }

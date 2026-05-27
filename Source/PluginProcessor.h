@@ -19,6 +19,13 @@ enum Slope
     Slope_48
 };
 
+enum SummingMode
+{
+    Summing_Average,
+    Summing_Sum,
+    Summing_Maximum
+};
+
 struct ChainSettings
 {
     float peakFreq1 { 0 }, peakGainInDecibels1 { 0 }, peakQuality1 {1.f};
@@ -28,6 +35,8 @@ struct ChainSettings
     float lowShelfFreq { 0 }, lowShelfGainInDecibels { 0 }, lowShelfQuality {1.f};
     float highShelfFreq { 0 }, highShelfGainInDecibels { 0 }, highShelfQuality {1.f};
     Slope lowCutSlope { Slope::Slope_12 }, highCutSlope { Slope::Slope_12 };
+    float makeupGainDb { 0.0f };
+    SummingMode summingMode { Summing_Average };
 };
 
 ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts);
@@ -189,14 +198,24 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    MonoChain leftChain, rightChain;
-    
-    // FFT Analyzer
-    std::unique_ptr<FFTAnalyzer> fftAnalyzer;
-    std::atomic<int> testCounter{0};
-    std::mutex fftMutex;
-    float maxFFT = 0.0f;  // For tracking maximum FFT value
-    
+    // Cut filters (series, at the edges of the signal chain)
+    CutFilter leftLowCutChain, rightLowCutChain;
+    CutFilter leftHighCutChain, rightHighCutChain;
+
+    // Parallel shelf/peak bands (each processes the full signal, outputs summed)
+    Filter leftLowShelf, rightLowShelf;
+    Filter leftPeak1, rightPeak1;
+    Filter leftPeak2, rightPeak2;
+    Filter leftPeak3, rightPeak3;
+    Filter leftHighShelf, rightHighShelf;
+
+    // Makeup gain applied after parallel sum
+    juce::dsp::Gain<float> makeupGain;
+
+    // FFT Analyzers
+    std::unique_ptr<FFTAnalyzer> preEQAnalyzer;
+    std::unique_ptr<FFTAnalyzer> postEQAnalyzer;
+
     void updatePeakFilters(const ChainSettings& chainSettings);
     void updateLowShelfFilter(const ChainSettings& chainSettings);
     void updateHighShelfFilter(const ChainSettings& chainSettings);
@@ -207,16 +226,26 @@ private:
     
 public:
     // For FFT analysis
-    void getFFTData(juce::Rectangle<float> fftBounds, float* fftData, float fftSize, float sampleRate) {
-        if (fftAnalyzer) {
-            fftAnalyzer->getFFTData(fftBounds, fftData, static_cast<int>(fftSize), sampleRate);
+    void getPreEQFFTData(float* fftData, int numBins, float sampleRate) {
+        if (preEQAnalyzer) {
+            preEQAnalyzer->getFFTData(fftData, numBins, sampleRate);
         } else {
-            std::fill_n(fftData, static_cast<int>(fftSize), 0.0f);
+            std::fill_n(fftData, numBins, 0.0f);
+        }
+    }
+
+    void getPostEQFFTData(float* fftData, int numBins, float sampleRate) {
+        if (postEQAnalyzer) {
+            postEQAnalyzer->getFFTData(fftData, numBins, sampleRate);
+        } else {
+            std::fill_n(fftData, numBins, 0.0f);
         }
     }
     
-    bool isFFTDataReady() const { return fftAnalyzer ? fftAnalyzer->isDataReady() : false; }
-    int getTestCounter() const { return testCounter.load(); }
+    bool isFFTDataReady() const {
+        return (preEQAnalyzer && preEQAnalyzer->isDataReady())
+            || (postEQAnalyzer && postEQAnalyzer->isDataReady());
+    }
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EQoonAudioProcessor)

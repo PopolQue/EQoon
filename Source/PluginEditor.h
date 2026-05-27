@@ -2,7 +2,6 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
-#include <mutex>
 #include <vector>
 
 struct CustomRotarySlider : juce::Slider
@@ -27,13 +26,18 @@ struct ResponseCurveComponent : juce::Component,
     
     // For FFT analysis
     void drawFFTAnalysis(juce::Graphics& g, juce::Rectangle<int> bounds);
+    void drawSpectrumPath(juce::Graphics& g,
+                          juce::Rectangle<int> bounds,
+                          const std::vector<float>& fftData,
+                          juce::Colour lineColour,
+                          juce::Colour fillColour,
+                          float strokeWidth);
 
 private:
 
     juce::Image fftImage;
-    std::mutex fftMutex;
-    double lastUpdateTime = 0.0;
-    const double minFrameTime = 1.0 / 30.0; // 30 FPS max
+    std::vector<float> preEQFFTData;
+    std::vector<float> postEQFFTData;
     EQoonAudioProcessor& audioProcessor;
     juce::Atomic<bool> parametersChanged{false};
     MonoChain monoChain;
@@ -47,6 +51,7 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     EQoonAudioProcessor& audioProcessor;
@@ -59,11 +64,13 @@ private:
     CustomRotarySlider peakFreq3Slider, peakGain3Slider, peakQuality3Slider;
     CustomRotarySlider highShelfFreqSlider, highShelfGainSlider, highShelfQualitySlider;
     CustomRotarySlider highCutFreqSlider, highCutSlopeSlider, highCutQualitySlider;
+    CustomRotarySlider makeupGainSlider;
+    juce::ComboBox summingModeCombo;
     
     // Labels for sliders
     // Filter name labels
     juce::Label lowCutNameLabel, lowShelfNameLabel, peak1NameLabel, peak2NameLabel, 
-                peak3NameLabel, highShelfNameLabel, highCutNameLabel;
+                peak3NameLabel, highShelfNameLabel, highCutNameLabel, makeupNameLabel;
     
     // Parameter labels (on the left)
     juce::Label lowCutFreqLabel, lowCutSlopeLabel, lowCutQualityLabel;
@@ -73,6 +80,7 @@ private:
     juce::Label peakFreq3Label, peakGain3Label, peakQuality3Label;
     juce::Label highShelfFreqLabel, highShelfGainLabel, highShelfQualityLabel;
     juce::Label highCutFreqLabel, highCutSlopeLabel, highCutQualityLabel;
+    juce::Label makeupGainLabel;
     
     // Value display labels (on the right of sliders)
     juce::Label lowCutFreqValue, lowCutSlopeValue, lowCutQualityValue;
@@ -82,6 +90,7 @@ private:
     juce::Label peakFreq3Value, peakGain3Value, peakQuality3Value;
     juce::Label highShelfFreqValue, highShelfGainValue, highShelfQualityValue;
     juce::Label highCutFreqValue, highCutSlopeValue, highCutQualityValue;
+    juce::Label makeupGainValue;
     
     // Band names
     static constexpr int numBands = 7;
@@ -89,6 +98,7 @@ private:
     
     // Row bounds for drawing
     juce::Array<juce::Rectangle<int>> bandRows;
+    juce::Rectangle<int> makeupRowBounds;
     
     // Helper functions
     void positionBandRow(juce::Rectangle<int> bounds,
@@ -111,6 +121,8 @@ private:
     Attachment peakFreqSlider3Attachment, peakGainSlider3Attachment, peakQualitySlider3Attachment;
     Attachment highShelfFreqSliderAttachment, highShelfGainSliderAttachment, highShelfQualitySliderAttachment;
     Attachment highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
+    Attachment makeupGainSliderAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment summingModeAttachment;
 
     std::vector<juce::Component*> getComps();
     std::vector<juce::Component*> getValueLabels();
