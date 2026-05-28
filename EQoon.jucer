@@ -13,6 +13,7 @@
       <FILE id="KORioB" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
       <FILE id="Fa1Z7a" name="FFTAnalyzer.cpp" compile="1" resource="0" file="Source/FFTAnalyzer.cpp"/>
       <FILE id="Fa1Z7b" name="FFTAnalyzer.h" compile="0" resource="0" file="Source/FFTAnalyzer.h"/>
+      <FILE id="TeStS" name="Tests.cpp" compile="1" resource="0" file="Source/Tests.cpp"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
@@ -22,6 +23,8 @@
     <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
             useGlobalPath="1"/>
     <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
     <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
@@ -52,6 +55,7 @@
         <MODULEPATH id="juce_graphics" path="../JUCE/modules"/>
         <MODULEPATH id="juce_gui_basics" path="../JUCE/modules"/>
         <MODULEPATH id="juce_gui_extra" path="../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="../../../../../../Applications/JUCE/modules"/>
       </MODULEPATHS>
     </XCODE_MAC>
   </EXPORTFORMATS>

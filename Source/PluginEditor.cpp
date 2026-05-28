@@ -1,12 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-class EQoonUnitTestRunner
-{
-public:
-    static void runAll();
-};
-
 ResponseCurveComponent::ResponseCurveComponent(EQoonAudioProcessor& p) : audioProcessor(p)
 {
     const auto& params = audioProcessor.getParameters();
@@ -73,8 +67,37 @@ void ResponseCurveComponent::timerCallback()
     const auto sampleRate = static_cast<float>(audioProcessor.getSampleRate());
     audioProcessor.getPreEQFFTData(preEQFFTData.data(), displayPoints, sampleRate);
     audioProcessor.getPostEQFFTData(postEQFFTData.data(), displayPoints, sampleRate);
-    
+
     repaint();
+}
+
+void ResponseCurveComponent::mouseMove(const juce::MouseEvent& event)
+{
+    mouseOver = true;
+    mouseX = event.getPosition().getX();
+    repaint();
+}
+
+void ResponseCurveComponent::mouseEnter(const juce::MouseEvent& event)
+{
+    mouseOver = true;
+    mouseX = event.getPosition().getX();
+    repaint();
+}
+
+void ResponseCurveComponent::mouseExit(const juce::MouseEvent& event)
+{
+    mouseOver = false;
+    repaint();
+}
+
+float ResponseCurveComponent::dbRescale(float x, float scale) noexcept
+{
+    x = juce::jlimit(0.0f, 1.0f, x);
+    if (scale < 0.0f)
+        return std::pow(x, std::pow(0.5f, -scale / 100.0f));
+    else
+        return std::pow(x, std::pow(2.0f, scale / 100.0f));
 }
 
 void ResponseCurveComponent::drawSpectrumPath(juce::Graphics& g,
@@ -90,18 +113,20 @@ void ResponseCurveComponent::drawSpectrumPath(juce::Graphics& g,
         return;
 
     const int displayPoints = juce::jmin((int) fftData.size(), juce::jmax(2, bounds.getWidth()));
+    const float w = (float) bounds.getWidth();
+    const float h = (float) bounds.getHeight();
+    const float top = 1.0f;
+    const float bottom = h - 1.0f;
 
     Path fftPath;
-    const float top = 1.0f;
-    const float bottom = (float) bounds.getHeight() - 1.0f;
-    const float height = bottom - top;
+    constexpr float rescaleDb = 18.0f;
 
     for (int i = 0; i < displayPoints; ++i)
     {
         const float normalisedX = (float) i / (float) juce::jmax(1, displayPoints - 1);
-        const float x = normalisedX * (float) bounds.getWidth();
-        const float magnitude = std::pow(juce::jlimit(0.0f, 1.0f, fftData[(size_t) i]), 0.72f);
-        const float y = juce::jmap(magnitude, 0.0f, 1.0f, bottom, top + height * 0.08f);
+        const float x = normalisedX * w;
+        const float magnitude = dbRescale(juce::jlimit(0.0f, 1.0f, fftData[(size_t) i]), rescaleDb);
+        const float y = juce::jmap(magnitude, 0.0f, 1.0f, bottom, top);
 
         if (i == 0)
             fftPath.startNewSubPath(x, y);
@@ -110,17 +135,15 @@ void ResponseCurveComponent::drawSpectrumPath(juce::Graphics& g,
     }
 
     Path filledPath(fftPath);
-    filledPath.lineTo((float) bounds.getWidth(), (float) bounds.getHeight());
-    filledPath.lineTo(0.0f, (float) bounds.getHeight());
+    filledPath.lineTo(w, bottom);
+    filledPath.lineTo(0.0f, bottom);
     filledPath.closeSubPath();
 
-    g.setGradientFill(ColourGradient(fillColour, 0.0f, 0.0f,
-                                     fillColour.withAlpha(0.0f), 0.0f, (float) bounds.getHeight(),
+    g.setGradientFill(ColourGradient(fillColour, 0.0f, bottom * 0.8f,
+                                     Colours::black, 0.0f, bottom,
                                      false));
     g.fillPath(filledPath);
 
-    g.setColour(lineColour.withAlpha(0.22f));
-    g.strokePath(fftPath, PathStrokeType(strokeWidth + 2.0f));
     g.setColour(lineColour);
     g.strokePath(fftPath, PathStrokeType(strokeWidth));
 }
@@ -141,16 +164,16 @@ void ResponseCurveComponent::drawFFTAnalysis(juce::Graphics& g, juce::Rectangle<
     drawSpectrumPath(g2,
                      bounds.withPosition(0, 0),
                      preEQFFTData,
-                     Colours::orange.withAlpha(0.58f),
-                     Colours::orange.withAlpha(0.12f),
-                     1.3f);
+                     Colours::orange.withAlpha(0.85f),
+                     Colours::orange.withAlpha(0.75f),
+                     1.0f);
 
     drawSpectrumPath(g2,
                      bounds.withPosition(0, 0),
                      postEQFFTData,
+                     Colours::cyan.withAlpha(0.95f),
                      Colours::cyan.withAlpha(0.85f),
-                     Colours::cyan.withAlpha(0.22f),
-                     1.8f);
+                     1.2f);
 
     auto legendBounds = juce::Rectangle<int>(bounds.getWidth() - 130, 8, 120, 36);
     g2.setFont(juce::Font(juce::FontOptions { 12.0f, juce::Font::bold }));
@@ -177,64 +200,71 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     }
     
     // Draw the grid lines
-    g.setColour(Colours::white.withAlpha(0.1f));
+    constexpr float gridAlpha = 0.06f;
+    constexpr float labelAlpha = 0.35f;
     
     // Horizontal grid lines (dB scale)
     for (float db = -24.0f; db <= 24.0f; db += 6.0f)
     {
         float y = jmap(db, -24.0f, 24.0f, (float)bounds.getBottom(), (float)bounds.getY());
+        g.setColour(Colours::white.withAlpha(gridAlpha));
         g.drawHorizontalLine((int)y, (float)bounds.getX(), (float)bounds.getRight());
         
-        // Add dB labels
-        g.setColour(Colours::white.withAlpha(0.5f));
+        g.setColour(Colours::white.withAlpha(labelAlpha));
         g.drawText(juce::String(db, 0) + " dB", bounds.getX() + 5, (int)y - 10, 50, 20, juce::Justification::left);
-        g.setColour(Colours::white.withAlpha(0.1f));
     }
     
     // Vertical grid lines (frequency scale)
-    float freqs[] = { 20.0f, 30.0f, 40.0f, 50.0f, 60.0f, 70.0f, 80.0f, 90.0f, 100.0f, 
-                      200.0f, 300.0f, 400.0f, 500.0f, 600.0f, 700.0f, 800.0f, 900.0f, 1000.0f, 
-                      2000.0f, 3000.0f, 4000.0f, 5000.0f, 6000.0f, 7000.0f, 8000.0f, 9000.0f, 10000.0f, 20000.0f };
+    const float freqs[] = { 30.0f, 40.0f, 50.0f, 60.0f, 80.0f, 100.0f,
+                            200.0f, 300.0f, 400.0f, 500.0f, 600.0f, 800.0f, 1000.0f,
+                            2000.0f, 3000.0f, 4000.0f, 5000.0f, 6000.0f, 8000.0f, 10000.0f, 20000.0f };
+
+    const float majorFreqs[] = { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
     
-    // Pre-calculate log values for frequency scaling
     const float logMinFreq = std::log10(20.0f);
     const float logMaxFreq = std::log10(20000.0f);
     const float logFreqRange = logMaxFreq - logMinFreq;
+
+    float lastLabelEnd = -100.0f;
     
     for (float freq : freqs)
     {
-        // Map frequency to x position (logarithmic scale)
         float logFreq = std::log10(freq);
         float x = bounds.getX() + bounds.getWidth() * (logFreq - logMinFreq) / logFreqRange;
         
-        // Only draw if within bounds
         if (x >= bounds.getX() && x <= bounds.getRight())
         {
-            // Draw the grid line
-            g.setColour(Colours::white.withAlpha(0.1f));
+            g.setColour(Colours::white.withAlpha(gridAlpha));
             g.drawVerticalLine((int)x, (float)bounds.getY(), (float)bounds.getBottom());
-            
-            // Add frequency labels for major divisions
-            bool isMajor = (freq == 20.0f || freq == 50.0f || freq == 100.0f || 
-                           freq == 200.0f || freq == 500.0f || freq == 1000.0f || 
-                           freq == 2000.0f || freq == 5000.0f || freq == 10000.0f || freq == 20000.0f);
+
+            bool isMajor = false;
+            for (float mf : majorFreqs)
+            {
+                if (std::abs(freq - mf) < 0.1f) { isMajor = true; break; }
+            }
             
             if (isMajor)
             {
-                g.setColour(Colours::white.withAlpha(0.7f));
                 juce::String freqText;
                 if (freq < 1000.0f)
-                    freqText = juce::String(freq, 0) + " Hz";
-                else if (freq < 10000.0f)
-                    freqText = juce::String(freq / 1000.0f, 1) + " kHz";
+                    freqText = juce::String((int) freq);
                 else
-                    freqText = juce::String(freq / 1000.0f, 0) + " kHz";
+                    freqText = juce::String(freq / 1000.0f, freq < 10000.0f ? 1 : 0) + "k";
+
+                const float labelWidth = 40.0f;
+                const float labelX = x - labelWidth * 0.5f;
                 
-                g.drawText(freqText, 
-                          (int)x - 30, 
-                          bounds.getBottom() - 20, 
-                          60, 20, 
-                          juce::Justification::centred);
+                if (labelX > lastLabelEnd + 4.0f)
+                {
+                    g.setColour(Colours::white.withAlpha(0.45f));
+                    g.setFont(juce::Font(juce::FontOptions{}.withHeight(10.0f)));
+                    g.drawText(freqText,
+                              (int) labelX,
+                              bounds.getBottom() - 18,
+                              (int) labelWidth, 16,
+                              juce::Justification::centred);
+                    lastLabelEnd = labelX + labelWidth;
+                }
             }
         }
     }
@@ -252,6 +282,8 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     auto& highcut = monoChain.get<ChainPositions::HighCut>();
 
     auto sampleRate = audioProcessor.getSampleRate();
+    const auto chainSettings = getChainSettings(audioProcessor.apvts);
+    const auto summingMode = chainSettings.summingMode;
     std::vector<double> mags;
     mags.resize(w);
 
@@ -259,6 +291,7 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     {
         auto freq = mapToLog10(double(i) / double(w), 20.0, 20000.0);
 
+        // LowCut cascaded magnitude (series, first in chain)
         double cutMag = 1.0;
         if (!lowcut.isBypassed<0>())
             cutMag *= lowcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
@@ -269,6 +302,7 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
         if (!lowcut.isBypassed<3>())
             cutMag *= lowcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
 
+        // HighCut cascaded magnitude (series, last in chain)
         if (!highcut.isBypassed<0>())
             cutMag *= highcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
         if (!highcut.isBypassed<1>())
@@ -278,26 +312,56 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
         if (!highcut.isBypassed<3>())
             cutMag *= highcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
 
-        // Display response: cascaded product of all bands (matches knob settings)
-        // regardless of summing mode (which only affects the audio path)
-        double bandMag = 1.0;
-        auto collectAndMultiply = [&](const Coefficients& coeffs) {
-            if (coeffs != nullptr)
-                bandMag *= coeffs->getMagnitudeForFrequency(freq, sampleRate);
-        };
+        // Compute combined band response matching the audio path
+        double bandMag;
+        if (summingMode == Summing_Classic)
+        {
+            // Classic cascaded: each band's magnitude multiplies (in series with cuts)
+            bandMag = 1.0;
+            auto multiplyMag = [&](const Coefficients& coeffs) {
+                if (coeffs != nullptr)
+                    bandMag *= coeffs->getMagnitudeForFrequency(freq, sampleRate);
+            };
+            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) multiplyMag(lowShelf.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak1>())    multiplyMag(peak1.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak2>())    multiplyMag(peak2.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak3>())    multiplyMag(peak3.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) multiplyMag(highShelf.coefficients);
+        }
+        else if (summingMode == Summing_Maximum)
+        {
+            bandMag = 0.0;
+            auto updateMax = [&](const Coefficients& coeffs) {
+                if (coeffs != nullptr)
+                    bandMag = juce::jmax(bandMag, coeffs->getMagnitudeForFrequency(freq, sampleRate));
+            };
+            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) updateMax(lowShelf.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak1>())    updateMax(peak1.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak2>())    updateMax(peak2.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak3>())    updateMax(peak3.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) updateMax(highShelf.coefficients);
+        }
+        else
+        {
+            // Average/Sum: sum complex responses of parallel bands
+            std::complex<double> parallelSum(0.0, 0.0);
+            auto addResponse = [&](const Coefficients& coeffs) {
+                if (coeffs != nullptr)
+                    parallelSum += getComplexResponse(coeffs, freq, sampleRate);
+            };
+            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) addResponse(lowShelf.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak1>())    addResponse(peak1.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak2>())    addResponse(peak2.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::Peak3>())    addResponse(peak3.coefficients);
+            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) addResponse(highShelf.coefficients);
 
-        if (!monoChain.isBypassed<ChainPositions::LowShelf>())
-            collectAndMultiply(lowShelf.coefficients);
-        if (!monoChain.isBypassed<ChainPositions::Peak1>())
-            collectAndMultiply(peak1.coefficients);
-        if (!monoChain.isBypassed<ChainPositions::Peak2>())
-            collectAndMultiply(peak2.coefficients);
-        if (!monoChain.isBypassed<ChainPositions::Peak3>())
-            collectAndMultiply(peak3.coefficients);
-        if (!monoChain.isBypassed<ChainPositions::HighShelf>())
-            collectAndMultiply(highShelf.coefficients);
+            if (summingMode == Summing_Average)
+                parallelSum /= 5.0;
 
-        double mag = cutMag * bandMag;
+            bandMag = std::abs(parallelSum);
+        }
+
+        const double mag = cutMag * bandMag;
         mags[i] = Decibels::gainToDecibels(mag);
     }
 
@@ -330,6 +394,47 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     // Add a highlight on top of the curve
     g.setColour(Colours::white.withAlpha(0.8f));
     g.strokePath(responseCurve, PathStrokeType(1.0f));
+    
+    // Mouse tracking line and frequency caption
+    if (mouseOver)
+    {
+        g.setColour(Colours::white.withAlpha(0.15f));
+        g.drawVerticalLine(mouseX, 0.0f, (float) bounds.getBottom());
+        
+        const float normalisedX = (float) mouseX / (float) w;
+        const float freq = std::pow(10.0f, std::log10(20.0f) + normalisedX * (std::log10(20000.0f) - std::log10(20.0f)));
+        
+        juce::String freqText;
+        if (freq < 1000.0f)
+            freqText = juce::String((int) freq) + " Hz";
+        else
+            freqText = juce::String(freq / 1000.0f, 1) + " kHz";
+
+        const int hoverBin = juce::jlimit(0, (int) preEQFFTData.size() - 1,
+                                          (int) (normalisedX * preEQFFTData.size()));
+        const float preDb = preEQFFTData.empty() ? -100.0f : juce::jmap(preEQFFTData[(size_t) hoverBin], 0.0f, 1.0f, -100.0f, 0.0f);
+        const float postDb = postEQFFTData.empty() ? -100.0f : juce::jmap(postEQFFTData[(size_t) hoverBin], 0.0f, 1.0f, -100.0f, 0.0f);
+        
+        juce::String dbText;
+        if (preDb > -100.0f && postDb > -100.0f)
+            dbText = "Pre: " + juce::String(preDb, 1) + " dB  Post: " + juce::String(postDb, 1) + " dB";
+        else if (preDb > -100.0f)
+            dbText = juce::String(preDb, 1) + " dB";
+
+        auto captionBox = juce::Rectangle<int>(mouseX - 70, 8, 140, 36);
+        g.setColour(Colours::black.withAlpha(0.7f));
+        g.fillRect(captionBox);
+        g.setColour(Colours::white.withAlpha(0.35f));
+        g.drawRect(captionBox, 1);
+        
+        g.setColour(Colours::white);
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(12.0f).withStyle("Bold")));
+        g.drawText(freqText, captionBox.removeFromTop(18), juce::Justification::centred);
+        
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(10.0f)));
+        g.setColour(Colours::white.withAlpha(0.6f));
+        g.drawText(dbText, captionBox, juce::Justification::centred);
+    }
 }
 
 EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
@@ -365,10 +470,10 @@ EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
     summingModeCombo.setColour(juce::ComboBox::buttonColourId, juce::Colours::white.withAlpha(0.5f));
     summingModeCombo.setColour(juce::ComboBox::arrowColourId, juce::Colours::white.withAlpha(0.6f));
     summingModeCombo.setJustificationType(juce::Justification::centred);
-    if (summingModeCombo.getNumItems() < 3)
+    if (summingModeCombo.getNumItems() < 4)
     {
         summingModeCombo.clear();
-        summingModeCombo.addItemList({ "Average", "Sum", "Maximum" }, 1);
+        summingModeCombo.addItemList({ "Classic", "Average", "Sum", "Maximum" }, 1);
     }
     summingModeCombo.setSelectedItemIndex(static_cast<int>(audioProcessor.apvts.getRawParameterValue("Summing Mode")->load()), juce::dontSendNotification);
 
@@ -389,7 +494,9 @@ bool EQoonAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (key == juce::KeyPress('t', juce::ModifierKeys::commandModifier, 0))
     {
         DBG("Running EQoon unit tests...");
-        EQoonUnitTestRunner::runAll();
+        juce::UnitTestRunner runner;
+        runner.setAssertOnFailure(false);
+        runner.runAllTests();
         DBG("Tests complete.");
         return true;
     }
@@ -426,7 +533,8 @@ void EQoonAudioProcessorEditor::positionBandRow(juce::Rectangle<int> bounds,
                                               juce::Slider& freqSlider, juce::Slider& gainSlider, juce::Slider& qSlider,
                                               juce::Label& freqLabel, juce::Label& gainLabel, juce::Label& qLabel,
                                               juce::Label& freqValue, juce::Label& gainValue, juce::Label& qValue,
-                                              juce::Label& nameLabel)
+                                              juce::Label& nameLabel,
+                                              bool isGainActuallySlope)
 {
     const int nameWidth = 80;    // Width for filter name
     const int labelWidth = 40;   // Width for parameter labels
@@ -503,18 +611,17 @@ void EQoonAudioProcessorEditor::positionBandRow(juce::Rectangle<int> bounds,
         freqValue.setText(juce::String(freqSlider.getValue(), 2) + " " + freqSlider.getTextValueSuffix(), juce::dontSendNotification);
     };
     
-    // Special handling for slope sliders (low-cut and high-cut)
-    if (&gainSlider == &lowCutSlopeSlider || &gainSlider == &highCutSlopeSlider) {
-        // For slope sliders, show the actual slope value in dB/oct
+    if (isGainActuallySlope)
+    {
         auto updateSlopeValue = [&gainValue, &gainSlider] {
             int slopeValue = 12 + (static_cast<int>(gainSlider.getValue()) * 12);
             gainValue.setText(juce::String(slopeValue) + " dB/oct", juce::dontSendNotification);
         };
-        
         gainSlider.onValueChange = updateSlopeValue;
-        updateSlopeValue(); // Set initial value
-    } else {
-        // For other gain sliders, show the normal value
+        updateSlopeValue();
+    }
+    else
+    {
         gainSlider.onValueChange = [this, &gainValue, &gainSlider] {
             gainValue.setText(juce::String(gainSlider.getValue(), 2) + " " + gainSlider.getTextValueSuffix(), juce::dontSendNotification);
         };
@@ -608,7 +715,8 @@ void EQoonAudioProcessorEditor::resized()
     positionBandRow(bandRows[0], lowCutFreqSlider, lowCutSlopeSlider, lowCutQualitySlider,
                    lowCutFreqLabel, lowCutSlopeLabel, lowCutQualityLabel,
                    lowCutFreqValue, lowCutSlopeValue, lowCutQualityValue,
-                   lowCutNameLabel);
+                   lowCutNameLabel,
+                   true);
 
     positionBandRow(bandRows[1], lowShelfFreqSlider, lowShelfGainSlider, lowShelfQualitySlider,
                    lowShelfFreqLabel, lowShelfGainLabel, lowShelfQualityLabel,
@@ -638,7 +746,8 @@ void EQoonAudioProcessorEditor::resized()
     positionBandRow(bandRows[6], highCutFreqSlider, highCutSlopeSlider, highCutQualitySlider,
                    highCutFreqLabel, highCutSlopeLabel, highCutQualityLabel,
                    highCutFreqValue, highCutSlopeValue, highCutQualityValue,
-                   highCutNameLabel);
+                   highCutNameLabel,
+                   true);
 
     makeupRowBounds = makeupRow;
 

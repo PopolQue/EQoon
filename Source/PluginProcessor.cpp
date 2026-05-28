@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
+#ifndef EQOON_TEST_BUILD
 #include "PluginEditor.h"
+#endif
 
 void updateCoefficients(Coefficients& old, const Coefficients& replacements)
 {
@@ -23,10 +25,15 @@ EQoonAudioProcessor::EQoonAudioProcessor()
 {
     preEQAnalyzer = std::make_unique<FFTAnalyzer>();
     postEQAnalyzer = std::make_unique<FFTAnalyzer>();
+
+    for (auto* param : getParameters())
+        param->addListener(this);
 }
 
 EQoonAudioProcessor::~EQoonAudioProcessor()
 {
+    for (auto* param : getParameters())
+        param->removeListener(this);
 }
 
 const juce::String EQoonAudioProcessor::getName() const
@@ -76,16 +83,16 @@ int EQoonAudioProcessor::getCurrentProgram()
     return 0;
 }
 
-void EQoonAudioProcessor::setCurrentProgram (int index)
+void EQoonAudioProcessor::setCurrentProgram (int)
 {
 }
 
-const juce::String EQoonAudioProcessor::getProgramName (int index)
+const juce::String EQoonAudioProcessor::getProgramName (int)
 {
     return {};
 }
 
-void EQoonAudioProcessor::changeProgramName (int index, const juce::String& newName)
+void EQoonAudioProcessor::changeProgramName (int, const juce::String&)
 {
 }
 
@@ -121,7 +128,15 @@ void EQoonAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     stereoSpec.numChannels = 2;
     makeupGain.prepare(stereoSpec);
 
+    scratchRefBuf.setSize(1, samplesPerBlock, false, false, false);
+    scratchTempBuf.setSize(1, samplesPerBlock, false, false, false);
+
     updateFilters();
+}
+
+void EQoonAudioProcessor::parameterValueChanged(int, float)
+{
+    parametersChanged.store(true, std::memory_order_release);
 }
 
 void EQoonAudioProcessor::releaseResources()
@@ -161,10 +176,17 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (totalNumInputChannels > 0 && preEQAnalyzer != nullptr)
         preEQAnalyzer->processSamples(buffer, totalNumInputChannels);
 
-    updateFilters();
+    if (parametersChanged.exchange(false, std::memory_order_acquire))
+        updateFilters();
 
     auto block = juce::dsp::AudioBlock<float>(buffer);
-    auto numSamples = block.getNumSamples();
+    auto numSamples = static_cast<int>(block.getNumSamples());
+
+    if (numSamples > scratchRefBuf.getNumSamples())
+    {
+        scratchRefBuf.setSize(1, numSamples, false, false, false);
+        scratchTempBuf.setSize(1, numSamples, false, false, false);
+    }
 
     for (int ch = 0; ch < totalNumInputChannels; ++ch)
     {
@@ -185,29 +207,53 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             lowCutChain.process(ctx);
         }
 
-        // 2. Save post-LowCut as reference for parallel bands
-        juce::AudioBuffer<float> refBuf(1, numSamples);
-        refBuf.copyFrom(0, 0, data, numSamples);
-
-        // 3. Clear output — we'll reconstruct from parallel bands
-        juce::FloatVectorOperations::fill(data, 0.0f, numSamples);
-
-        // 4. Process parallel bands according to summing mode
-        juce::AudioBuffer<float> tempBuf(1, numSamples);
-
         auto chainSettings = getChainSettings(apvts);
 
-        switch (chainSettings.summingMode)
+        if (chainSettings.summingMode == Summing_Classic)
         {
-            case Summing_Average:
-            case Summing_Sum:
+            // Classic cascaded: LowCut → LowShelf → Peak1 → Peak2 → Peak3 → HighShelf → HighCut
+            // Each filter processes the previous one's output in-place.
+            {
+                auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
+                lowShelf.process(ctx);
+            }
+            {
+                auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
+                peak1.process(ctx);
+            }
+            {
+                auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
+                peak2.process(ctx);
+            }
+            {
+                auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
+                peak3.process(ctx);
+            }
+            {
+                auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
+                highShelf.process(ctx);
+            }
+        }
+        else
+        {
+            // 2. Save post-LowCut as reference for parallel bands
+            scratchRefBuf.copyFrom(0, 0, data, numSamples);
+
+            // 3. Clear output — we'll reconstruct from parallel bands
+            juce::FloatVectorOperations::fill(data, 0.0f, numSamples);
+
+            // 4. Process parallel bands according to summing mode
+            switch (chainSettings.summingMode)
+            {
+                case Summing_Average:
+                case Summing_Sum:
             {
                 auto processAndSum = [&](juce::dsp::IIR::Filter<float>& filter)
                 {
-                    tempBuf.copyFrom(0, 0, refBuf.getReadPointer(0), numSamples);
-                    auto tempBlock = juce::dsp::AudioBlock<float>(tempBuf);
+                    scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
+                    auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
                     filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
-                    juce::FloatVectorOperations::add(data, tempBuf.getReadPointer(0), numSamples);
+                    juce::FloatVectorOperations::add(data, scratchTempBuf.getReadPointer(0), numSamples);
                 };
 
                 processAndSum(lowShelf);
@@ -225,19 +271,19 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             {
                 auto processAndMax = [&](juce::dsp::IIR::Filter<float>& filter)
                 {
-                    tempBuf.copyFrom(0, 0, refBuf.getReadPointer(0), numSamples);
-                    auto tempBlock = juce::dsp::AudioBlock<float>(tempBuf);
+                    scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
+                    auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
                     filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
                     for (int s = 0; s < numSamples; ++s)
-                        data[s] = juce::jmax(data[s], tempBuf.getSample(0, s));
+                        data[s] = juce::jmax(data[s], scratchTempBuf.getSample(0, s));
                 };
 
-                tempBuf.copyFrom(0, 0, refBuf.getReadPointer(0), numSamples);
+                scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
                 {
-                    auto tb = juce::dsp::AudioBlock<float>(tempBuf);
+                    auto tb = juce::dsp::AudioBlock<float>(scratchTempBuf);
                     lowShelf.process(juce::dsp::ProcessContextReplacing<float>(tb));
                 }
-                juce::FloatVectorOperations::copy(data, tempBuf.getReadPointer(0), numSamples);
+                juce::FloatVectorOperations::copy(data, scratchTempBuf.getReadPointer(0), numSamples);
                 processAndMax(peak1);
                 processAndMax(peak2);
                 processAndMax(peak3);
@@ -245,6 +291,7 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
                 break;
             }
         }
+        }   // close else block (parallel branches)
 
         // 5. Process HighCut (series, last in chain)
         {
@@ -265,10 +312,14 @@ bool EQoonAudioProcessor::hasEditor() const
     return true;
 }
 
+#ifndef EQOON_TEST_BUILD
 juce::AudioProcessorEditor* EQoonAudioProcessor::createEditor()
 {
     return new EQoonAudioProcessorEditor (*this);
 }
+#else
+juce::AudioProcessorEditor* EQoonAudioProcessor::createEditor() { return nullptr; }
+#endif
 
 void EQoonAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
@@ -311,7 +362,10 @@ ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts)
     settings.highCutSlope = static_cast<Slope>(apvts.getRawParameterValue("HighCut Slope")->load());
     settings.highCutQuality = apvts.getRawParameterValue("HighCut Quality")->load();
     settings.makeupGainDb = apvts.getRawParameterValue("Makeup Gain")->load();
-    settings.summingMode = static_cast<SummingMode>(static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load()));
+    {
+        const int summingIndex = juce::jlimit(0, 3, static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load()));
+        settings.summingMode = static_cast<SummingMode>(summingIndex);
+    }
     return settings;
 }
 
@@ -329,8 +383,8 @@ Coefficients makePeakFilter(const ChainSettings& chainSettings, double sampleRat
             return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
                 sampleRate, chainSettings.peakFreq3, chainSettings.peakQuality3, juce::Decibels::decibelsToGain(chainSettings.peakGainInDecibels3));
         default:
-            jassertfalse; // Invalid peak index
-            return nullptr;
+            jassertfalse;
+            return juce::dsp::IIR::Coefficients<float>::makePeakFilter(sampleRate, 1000.0f, 1.0f, 1.0f);
     }
 }
 
@@ -492,7 +546,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
                                                            1.f));
     layout.add(std::make_unique<juce::AudioParameterChoice>("HighCut Slope", "HighCut Slope", slopeSteep, 0));
 
-    juce::StringArray summingModes = { "Average", "Sum", "Maximum" };
+    juce::StringArray summingModes = { "Classic", "Average", "Sum", "Maximum" };
     layout.add(std::make_unique<juce::AudioParameterChoice>("Summing Mode", "Summing Mode", summingModes, 0));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>("Makeup Gain",
@@ -507,12 +561,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
 
 //==============================================================================
 // This creates new instances of the plugin..
+#ifndef EQOON_TEST_BUILD
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new EQoonAudioProcessor();
 }
+#endif
 
 #endif // JucePlugin_PreferredChannelConfigurations
-
-#include "Tests.cpp"
 

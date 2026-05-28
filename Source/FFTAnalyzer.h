@@ -27,9 +27,6 @@ private:
     static constexpr float maxDisplayFrequency = 20000.0f;
     static constexpr float minDisplayDecibels = -100.0f;
     static constexpr float maxDisplayDecibels = 0.0f;
-    static constexpr float attackCoefficient = 0.78f;
-    static constexpr float releaseCoefficient = 0.62f;
-    static constexpr float idleDecayCoefficient = 0.70f;
     static constexpr auto windowType = juce::dsp::WindowingFunction<float>::blackmanHarris;
 
     juce::dsp::FFT forwardFFT;
@@ -39,12 +36,12 @@ private:
     std::array<float, fifoCapacity> fifo;
     std::array<float, fftSize> analysisBuffer;
     std::array<float, fftSize * 2> fftData;
-    std::vector<float> smoothedDisplayData;
+    std::vector<float> displayData;
     
     int analysisBufferIndex = 0;
+    int framesSinceLastFFT = 0;
     std::atomic<bool> hasSpectrumData { false };
     
-    void decayDisplayData();
     void processAvailableSamples(float sampleRate);
     void processFFTFrame(float sampleRate);
 };

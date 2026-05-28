@@ -40,6 +40,7 @@ Also produces AU variant (`EQoon.component`) and standalone.
 - **Mono processing chain** — `MonoChain` is a `ProcessorChain<CutFilter, Filter, Filter, Filter, Filter, Filter, CutFilter>`. Stereo uses two separate mono chains (`leftChain`, `rightChain`).
 - **Slope enum** in `PluginProcessor.h`: `Slope_12` (1 biquad), `Slope_24` (2), `Slope_36` (3), `Slope_48` (4).
 - **FFT**: 2048-point transform, Hann window, pre/post EQ analyzers, rendered at 30 FPS via `Timer`.
+- **Spectrum visualization** — `drawSpectrumPath` fills a closed path with a vertical `ColourGradient` from bright spectrum color → near-black. Thin contour stroke with subtle glow. Mouse hover shows vertical line + frequency caption. Grid lines at 6 dB intervals + standard log-spaced frequencies with labels.
 
 ## Git
 

@@ -23,6 +23,9 @@ struct ResponseCurveComponent : juce::Component,
     void parameterGestureChanged(int parameterIndex, bool gestureIsStarting) override {}
     void timerCallback() override;
     void paint(juce::Graphics& g) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseEnter(const juce::MouseEvent& event) override;
+    void mouseExit(const juce::MouseEvent& event) override;
     
     // For FFT analysis
     void drawFFTAnalysis(juce::Graphics& g, juce::Rectangle<int> bounds);
@@ -33,6 +36,8 @@ struct ResponseCurveComponent : juce::Component,
                           juce::Colour fillColour,
                           float strokeWidth);
 
+    static float dbRescale(float x, float scale) noexcept;
+
 private:
 
     juce::Image fftImage;
@@ -41,6 +46,9 @@ private:
     EQoonAudioProcessor& audioProcessor;
     juce::Atomic<bool> parametersChanged{false};
     MonoChain monoChain;
+
+    bool mouseOver { false };
+    int mouseX { 0 };
 };
 
 class EQoonAudioProcessorEditor : public juce::AudioProcessorEditor
@@ -105,7 +113,8 @@ private:
                        juce::Slider& freqSlider, juce::Slider& gainSlider, juce::Slider& qSlider,
                        juce::Label& freqLabel, juce::Label& gainLabel, juce::Label& qLabel,
                        juce::Label& freqValue, juce::Label& gainValue, juce::Label& qValue,
-                       juce::Label& nameLabel);
+                       juce::Label& nameLabel,
+                       bool isGainActuallySlope = false);
     
     void setupLabel(juce::Label& label, const juce::String& text);
     

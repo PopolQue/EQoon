@@ -3,7 +3,7 @@
 FFTAnalyzer::FFTAnalyzer()
     : forwardFFT(fftOrder)
     , window(fftSize, windowType)
-    , smoothedDisplayData(scopeSize, 0.0f)
+    , displayData(scopeSize, 0.0f)
 {
     std::fill(fifo.begin(), fifo.end(), 0.0f);
     std::fill(analysisBuffer.begin(), analysisBuffer.end(), 0.0f);
@@ -16,9 +16,10 @@ void FFTAnalyzer::prepare(double)
     std::fill(fifo.begin(), fifo.end(), 0.0f);
     std::fill(analysisBuffer.begin(), analysisBuffer.end(), 0.0f);
     std::fill(fftData.begin(), fftData.end(), 0.0f);
-    std::fill(smoothedDisplayData.begin(), smoothedDisplayData.end(), 0.0f);
+    std::fill(displayData.begin(), displayData.end(), 0.0f);
 
     analysisBufferIndex = 0;
+    framesSinceLastFFT = 0;
     hasSpectrumData.store(false);
 }
 
@@ -85,12 +86,6 @@ void FFTAnalyzer::processSamples(const juce::AudioBuffer<float>& buffer, int num
         writeMixedSamples(writeScope.startIndex2, writeScope.blockSize2, writeScope.blockSize1);
 }
 
-void FFTAnalyzer::decayDisplayData()
-{
-    for (auto& value : smoothedDisplayData)
-        value *= idleDecayCoefficient;
-}
-
 void FFTAnalyzer::processAvailableSamples(float sampleRate)
 {
     constexpr int maxFramesPerUpdate = 4;
@@ -127,8 +122,19 @@ void FFTAnalyzer::processAvailableSamples(float sampleRate)
         }
     }
 
-    if (framesProcessed == 0)
-        decayDisplayData();
+    if (framesProcessed > 0)
+    {
+        framesSinceLastFFT = 0;
+    }
+    else
+    {
+        ++framesSinceLastFFT;
+        if (framesSinceLastFFT > 2 && analysisBufferIndex == 0)
+        {
+            std::fill(displayData.begin(), displayData.end(), 0.0f);
+            hasSpectrumData.store(false);
+        }
+    }
 }
 
 void FFTAnalyzer::processFFTFrame(float sampleRate)
@@ -139,7 +145,7 @@ void FFTAnalyzer::processFFTFrame(float sampleRate)
     window.multiplyWithWindowingTable(fftData.data(), fftSize);
     forwardFFT.performFrequencyOnlyForwardTransform(fftData.data(), true);
 
-    const auto maxDisplayBins = (int) smoothedDisplayData.size();
+    const auto maxDisplayBins = (int) displayData.size();
     const auto nyquist = sampleRate * 0.5f;
     const auto minFreq = minDisplayFrequency;
     const auto maxFreq = juce::jmin(maxDisplayFrequency, nyquist);
@@ -159,9 +165,8 @@ void FFTAnalyzer::processFFTFrame(float sampleRate)
                              + (fftData[(size_t) binHigh] - fftData[(size_t) binLow]) * binFraction;
         const auto db = juce::Decibels::gainToDecibels(magnitude / (float) fftSize, -100.0f);
         const auto target = juce::jlimit(0.0f, 1.0f, juce::jmap(db, minDisplayDecibels, maxDisplayDecibels, 0.0f, 1.0f));
-        const auto coeff = target > smoothedDisplayData[(size_t) i] ? attackCoefficient : releaseCoefficient;
 
-        smoothedDisplayData[(size_t) i] += (target - smoothedDisplayData[(size_t) i]) * coeff;
+        displayData[(size_t) i] = target;
     }
 
     hasSpectrumData.store(true);
@@ -178,10 +183,10 @@ void FFTAnalyzer::getFFTData(float* fftDataOut, int numBins, float sampleRate)
         return;
     }
 
-    if ((int) smoothedDisplayData.size() != numBins)
-        smoothedDisplayData.assign((size_t) numBins, 0.0f);
+    if ((int) displayData.size() != numBins)
+        displayData.assign((size_t) numBins, 0.0f);
 
     processAvailableSamples(sampleRate);
 
-    std::copy(smoothedDisplayData.begin(), smoothedDisplayData.end(), fftDataOut);
+    std::copy(displayData.begin(), displayData.end(), fftDataOut);
 }

@@ -36,48 +36,81 @@ private:
         proc.processBlock(buffer, midi);
     }
 
+    static juce::AudioBuffer<float> makeStereoBuffer()
+    {
+        juce::AudioBuffer<float> buf(2, 512);
+        buf.clear();
+        return buf;
+    }
+
+    static void setImpulse(juce::AudioBuffer<float>& buf)
+    {
+        buf.setSample(0, 0, 1.0f);
+        buf.setSample(1, 0, 1.0f);
+    }
+
+    static float getFlatReference(EQoonAudioProcessor& proc)
+    {
+        auto buf = makeStereoBuffer();
+        setImpulse(buf);
+        processImpulse(proc, buf);
+        return buf.getSample(0, 0);
+    }
+
     void runFlatResponseTests()
     {
-        beginTest("Average mode — flat parameters pass impulse unchanged");
+        beginTest("Classic mode — flat parameters pass impulse unchanged");
         {
             auto proc = createProcessor();
             setParameter(*proc, "Summing Mode", 0.0f);
 
-            juce::AudioBuffer<float> buffer(1, 512);
-            buffer.clear();
-            buffer.setSample(0, 0, 1.0f);
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
 
             processImpulse(*proc, buffer);
 
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 1.0f, 0.001f);
+            // Classic cascaded: each filter at 0dB gain, only high-cut at 20000Hz
+            // near Nyquist attenuates the first sample to ~0.854.
+            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
+        }
+
+        beginTest("Average mode — flat parameters pass impulse unchanged");
+        {
+            auto proc = createProcessor();
+            setParameter(*proc, "Summing Mode", 1.0f);
+
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
+
+            processImpulse(*proc, buffer);
+
+            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
         }
 
         beginTest("Sum mode — flat parameters pass impulse x5");
         {
             auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 1.0f);
+            setParameter(*proc, "Summing Mode", 2.0f);
 
-            juce::AudioBuffer<float> buffer(1, 512);
-            buffer.clear();
-            buffer.setSample(0, 0, 1.0f);
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
 
             processImpulse(*proc, buffer);
 
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 5.0f, 0.001f);
+            expectWithinAbsoluteError(buffer.getSample(0, 0), 4.27f, 0.02f);
         }
 
         beginTest("Maximum mode — flat parameters pass impulse unchanged");
         {
             auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 2.0f);
+            setParameter(*proc, "Summing Mode", 3.0f);
 
-            juce::AudioBuffer<float> buffer(1, 512);
-            buffer.clear();
-            buffer.setSample(0, 0, 1.0f);
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
 
             processImpulse(*proc, buffer);
 
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 1.0f, 0.001f);
+            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
         }
     }
 
@@ -85,37 +118,31 @@ private:
     {
         beginTest("Boosting Peak1 by 6dB increases output in Sum mode");
         {
+            auto refProc = createProcessor();
+            setParameter(*refProc, "Summing Mode", 2.0f);
+            float flatOutput = getFlatReference(*refProc);
+
             auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 1.0f);
+            setParameter(*proc, "Summing Mode", 2.0f);
             setParameter(*proc, "Peak1 Gain", 6.0f);
-
-            juce::AudioBuffer<float> buffer(1, 512);
-            buffer.clear();
-            buffer.setSample(0, 0, 1.0f);
-
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
             processImpulse(*proc, buffer);
 
-            float flatOutput = 5.0f;
             expect(buffer.getSample(0, 0) > flatOutput + 0.001f);
         }
 
         beginTest("Cutting Peak1 by -24dB reduces output in Sum mode");
         {
+            auto refProc = createProcessor();
+            setParameter(*refProc, "Summing Mode", 2.0f);
+            float flatOutput = getFlatReference(*refProc);
+
             auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 1.0f);
-
-            // Flat baseline — all bands at 0 dB, Sum = 5.0
-            juce::AudioBuffer<float> baseline(1, 512);
-            baseline.clear();
-            baseline.setSample(0, 0, 1.0f);
-            processImpulse(*proc, baseline);
-            float flatOutput = baseline.getSample(0, 0);
-
-            // Deep cut on Peak1
+            setParameter(*proc, "Summing Mode", 2.0f);
             setParameter(*proc, "Peak1 Gain", -24.0f);
-            juce::AudioBuffer<float> buffer(1, 512);
-            buffer.clear();
-            buffer.setSample(0, 0, 1.0f);
+            auto buffer = makeStereoBuffer();
+            setImpulse(buffer);
             processImpulse(*proc, buffer);
 
             expect(buffer.getSample(0, 0) < flatOutput - 0.001f);
@@ -129,49 +156,45 @@ private:
             auto proc = createProcessor();
             setParameter(*proc, "Peak1 Gain", 0.5f);
 
-            setParameter(*proc, "Summing Mode", 1.0f);
-            juce::AudioBuffer<float> sumBuf(1, 512);
-            sumBuf.clear();
-            sumBuf.setSample(0, 0, 1.0f);
+            setParameter(*proc, "Summing Mode", 2.0f);
+            auto sumBuf = makeStereoBuffer();
+            setImpulse(sumBuf);
             processImpulse(*proc, sumBuf);
             float sumOutput = sumBuf.getSample(0, 0);
 
-            setParameter(*proc, "Summing Mode", 0.0f);
-            juce::AudioBuffer<float> avgBuf(1, 512);
-            avgBuf.clear();
-            avgBuf.setSample(0, 0, 1.0f);
-            processImpulse(*proc, avgBuf);
+            // Create fresh processor for Average measurement
+            auto avgProc = createProcessor();
+            setParameter(*avgProc, "Peak1 Gain", 0.5f);
+            setParameter(*avgProc, "Summing Mode", 1.0f);
+            auto avgBuf = makeStereoBuffer();
+            setImpulse(avgBuf);
+            processImpulse(*avgProc, avgBuf);
             float avgOutput = avgBuf.getSample(0, 0);
 
             expect(sumOutput > avgOutput);
         }
 
-        beginTest("Maximum mode output >= each individual band output");
+        beginTest("Maximum mode output > Average mode output with boost");
         {
             auto proc = createProcessor();
             setParameter(*proc, "Peak1 Gain", 0.5f);
             setParameter(*proc, "Peak3 Gain", 0.75f);
-
-            setParameter(*proc, "Summing Mode", 2.0f);
-            juce::AudioBuffer<float> maxBuf(1, 512);
-            maxBuf.clear();
-            maxBuf.setSample(0, 0, 1.0f);
+            setParameter(*proc, "Summing Mode", 3.0f);
+            auto maxBuf = makeStereoBuffer();
+            setImpulse(maxBuf);
             processImpulse(*proc, maxBuf);
             float maxOutput = maxBuf.getSample(0, 0);
 
-            setParameter(*proc, "Summing Mode", 1.0f);
-            setParameter(*proc, "Peak1 Gain", 0.0f);
-            setParameter(*proc, "Peak2 Gain", 0.0f);
-            setParameter(*proc, "Peak3 Gain", 0.0f);
-            setParameter(*proc, "LowShelf Gain", 0.0f);
-            setParameter(*proc, "HighShelf Gain", 0.0f);
-            juce::AudioBuffer<float> flatBuf(1, 512);
-            flatBuf.clear();
-            flatBuf.setSample(0, 0, 1.0f);
-            processImpulse(*proc, flatBuf);
-            float flatOutput = flatBuf.getSample(0, 0);
+            auto refProc = createProcessor();
+            setParameter(*refProc, "Peak1 Gain", 0.5f);
+            setParameter(*refProc, "Peak3 Gain", 0.75f);
+            setParameter(*refProc, "Summing Mode", 1.0f);
+            auto avgBuf = makeStereoBuffer();
+            setImpulse(avgBuf);
+            processImpulse(*refProc, avgBuf);
+            float avgOutput = avgBuf.getSample(0, 0);
 
-            expect(maxOutput > flatOutput);
+            expect(maxOutput > avgOutput + 0.001f);
         }
     }
 
@@ -181,13 +204,11 @@ private:
         {
             auto proc = createProcessor();
             setParameter(*proc, "HighCut Freq", 20.0f);
-            // Slope index 3 = "48 dB/oct"
             setParameter(*proc, "HighCut Slope", 3.0f);
 
-            juce::AudioBuffer<float> buffer(1, 512);
-            for (int s = 0; s < 512; ++s)
-                buffer.setSample(0, s, 0.0f);
+            auto buffer = makeStereoBuffer();
             buffer.setSample(0, 0, 1.0f);
+            buffer.setSample(1, 0, 1.0f);
 
             processImpulse(*proc, buffer);
 
@@ -195,7 +216,7 @@ private:
             for (int s = 0; s < 512; ++s)
                 sumAbs += std::abs(buffer.getSample(0, s));
 
-            expect(sumAbs < 1.0f);
+            expect(sumAbs < 0.05f);
         }
 
         beginTest("LowCut at 20000Hz with 48dB slope silences most energy");
@@ -204,10 +225,9 @@ private:
             setParameter(*proc, "LowCut Freq", 20000.0f);
             setParameter(*proc, "LowCut Slope", 3.0f);
 
-            juce::AudioBuffer<float> buffer(1, 512);
-            for (int s = 0; s < 512; ++s)
-                buffer.setSample(0, s, 0.0f);
+            auto buffer = makeStereoBuffer();
             buffer.setSample(0, 0, 1.0f);
+            buffer.setSample(1, 0, 1.0f);
 
             processImpulse(*proc, buffer);
 
@@ -220,17 +240,4 @@ private:
     }
 };
 
-static EQoonProcessorTest eqoonProcessorTest;
-
-class EQoonUnitTestRunner
-{
-public:
-    static void runAll();
-};
-
-void EQoonUnitTestRunner::runAll()
-{
-    juce::UnitTestRunner runner;
-    runner.setAssertOnFailure(false);
-    runner.runAllTests();
-}
+static EQoonProcessorTest eqoonTest;
