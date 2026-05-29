@@ -35,26 +35,32 @@ void ResponseCurveComponent::timerCallback()
     if (needsUpdate)
     {
         auto chainSettings = getChainSettings(audioProcessor.apvts);
-
-        auto peakCoefficients1 = makePeakFilter(chainSettings, audioProcessor.getSampleRate(), 1);
-        auto peakCoefficients2 = makePeakFilter(chainSettings, audioProcessor.getSampleRate(), 2);
-        auto peakCoefficients3 = makePeakFilter(chainSettings, audioProcessor.getSampleRate(), 3);
-
-        updateCoefficients(monoChain.get<ChainPositions::Peak1>().coefficients, peakCoefficients1);
-        updateCoefficients(monoChain.get<ChainPositions::Peak2>().coefficients, peakCoefficients2);
-        updateCoefficients(monoChain.get<ChainPositions::Peak3>().coefficients, peakCoefficients3);
-
-        auto lowCutCoefficients = makeLowCutFilter(chainSettings, audioProcessor.getSampleRate());
-        auto highCutCoefficients = makeHighCutFilter(chainSettings, audioProcessor.getSampleRate());
         
-        updateCutFilter(monoChain.get<ChainPositions::LowCut>(), lowCutCoefficients, chainSettings.lowCutSlope);
-        updateCutFilter(monoChain.get<ChainPositions::HighCut>(), highCutCoefficients, chainSettings.highCutSlope);
-        
-        auto lowShelfCoefficients = makeLowShelfFilter(chainSettings, audioProcessor.getSampleRate());
-        auto highShelfCoefficients = makeHighShelfFilter(chainSettings, audioProcessor.getSampleRate());
+        auto updateChain = [&](MonoChain& chain, const ChannelSettings& channelSettings)
+        {
+            auto peakCoefficients1 = makePeakFilter(channelSettings, audioProcessor.getSampleRate(), 1);
+            auto peakCoefficients2 = makePeakFilter(channelSettings, audioProcessor.getSampleRate(), 2);
+            auto peakCoefficients3 = makePeakFilter(channelSettings, audioProcessor.getSampleRate(), 3);
 
-        updateCoefficients(monoChain.get<ChainPositions::LowShelf>().coefficients, lowShelfCoefficients);
-        updateCoefficients(monoChain.get<ChainPositions::HighShelf>().coefficients, highShelfCoefficients);
+            updateCoefficients(chain.get<ChainPositions::Peak1>().coefficients, peakCoefficients1);
+            updateCoefficients(chain.get<ChainPositions::Peak2>().coefficients, peakCoefficients2);
+            updateCoefficients(chain.get<ChainPositions::Peak3>().coefficients, peakCoefficients3);
+
+            auto lowCutCoefficients = makeLowCutFilter(channelSettings, audioProcessor.getSampleRate());
+            auto highCutCoefficients = makeHighCutFilter(channelSettings, audioProcessor.getSampleRate());
+            
+            updateCutFilter(chain.get<ChainPositions::LowCut>(), lowCutCoefficients, channelSettings.lowCutSlope);
+            updateCutFilter(chain.get<ChainPositions::HighCut>(), highCutCoefficients, channelSettings.highCutSlope);
+            
+            auto lowShelfCoefficients = makeLowShelfFilter(channelSettings, audioProcessor.getSampleRate());
+            auto highShelfCoefficients = makeHighShelfFilter(channelSettings, audioProcessor.getSampleRate());
+
+            updateCoefficients(chain.get<ChainPositions::LowShelf>().coefficients, lowShelfCoefficients);
+            updateCoefficients(chain.get<ChainPositions::HighShelf>().coefficients, highShelfCoefficients);
+        };
+
+        updateChain(leftChain, chainSettings.left);
+        updateChain(rightChain, chainSettings.right);
     }
 
     const int displayPoints = juce::jmax(2, getWidth());
@@ -269,115 +275,107 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
         }
     }
     
-    // Draw the response curve on top
+    // Draw the response curves on top
     auto responseArea = bounds;
     auto w = responseArea.getWidth();
-
-    auto& lowcut = monoChain.get<ChainPositions::LowCut>();
-    auto& lowShelf = monoChain.get<ChainPositions::LowShelf>();
-    auto& peak1 = monoChain.get<ChainPositions::Peak1>();
-    auto& peak2 = monoChain.get<ChainPositions::Peak2>();
-    auto& peak3 = monoChain.get<ChainPositions::Peak3>();
-    auto& highShelf = monoChain.get<ChainPositions::HighShelf>();
-    auto& highcut = monoChain.get<ChainPositions::HighCut>();
-
     auto sampleRate = audioProcessor.getSampleRate();
     const auto chainSettings = getChainSettings(audioProcessor.apvts);
     const auto summingMode = chainSettings.summingMode;
-    std::vector<double> mags;
-    mags.resize(w);
 
-    for (int i = 0; i < w; ++i)
+    auto calculateMags = [&](MonoChain& chain, std::vector<double>& mags)
     {
-        auto freq = mapToLog10(double(i) / double(w), 20.0, 20000.0);
+        auto& lowcut = chain.get<ChainPositions::LowCut>();
+        auto& lowShelf = chain.get<ChainPositions::LowShelf>();
+        auto& peak1 = chain.get<ChainPositions::Peak1>();
+        auto& peak2 = chain.get<ChainPositions::Peak2>();
+        auto& peak3 = chain.get<ChainPositions::Peak3>();
+        auto& highShelf = chain.get<ChainPositions::HighShelf>();
+        auto& highcut = chain.get<ChainPositions::HighCut>();
 
-        // LowCut cascaded magnitude (series, first in chain)
-        double cutMag = 1.0;
-        if (!lowcut.isBypassed<0>())
-            cutMag *= lowcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!lowcut.isBypassed<1>())
-            cutMag *= lowcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!lowcut.isBypassed<2>())
-            cutMag *= lowcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!lowcut.isBypassed<3>())
-            cutMag *= lowcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-
-        // HighCut cascaded magnitude (series, last in chain)
-        if (!highcut.isBypassed<0>())
-            cutMag *= highcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!highcut.isBypassed<1>())
-            cutMag *= highcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!highcut.isBypassed<2>())
-            cutMag *= highcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-        if (!highcut.isBypassed<3>())
-            cutMag *= highcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
-
-        // Compute combined band response matching the audio path
-        double bandMag;
-        if (summingMode == Summing_Classic)
+        for (int i = 0; i < w; ++i)
         {
-            // Classic cascaded: each band's magnitude multiplies (in series with cuts)
-            bandMag = 1.0;
-            auto multiplyMag = [&](const Coefficients& coeffs) {
-                if (coeffs != nullptr)
-                    bandMag *= coeffs->getMagnitudeForFrequency(freq, sampleRate);
-            };
-            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) multiplyMag(lowShelf.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak1>())    multiplyMag(peak1.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak2>())    multiplyMag(peak2.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak3>())    multiplyMag(peak3.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) multiplyMag(highShelf.coefficients);
+            auto freq = mapToLog10(double(i) / double(w), 20.0, 20000.0);
+
+            double cutMag = 1.0;
+            if (!lowcut.isBypassed<0>()) cutMag *= lowcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!lowcut.isBypassed<1>()) cutMag *= lowcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!lowcut.isBypassed<2>()) cutMag *= lowcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!lowcut.isBypassed<3>()) cutMag *= lowcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+
+            if (!highcut.isBypassed<0>()) cutMag *= highcut.get<0>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!highcut.isBypassed<1>()) cutMag *= highcut.get<1>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!highcut.isBypassed<2>()) cutMag *= highcut.get<2>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+            if (!highcut.isBypassed<3>()) cutMag *= highcut.get<3>().coefficients->getMagnitudeForFrequency(freq, sampleRate);
+
+            double bandMag;
+            if (summingMode == Summing_Classic)
+            {
+                bandMag = 1.0;
+                auto multiplyMag = [&](const Coefficients& coeffs) {
+                    if (coeffs != nullptr) bandMag *= coeffs->getMagnitudeForFrequency(freq, sampleRate);
+                };
+                if (!chain.isBypassed<ChainPositions::LowShelf>()) multiplyMag(lowShelf.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak1>())    multiplyMag(peak1.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak2>())    multiplyMag(peak2.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak3>())    multiplyMag(peak3.coefficients);
+                if (!chain.isBypassed<ChainPositions::HighShelf>()) multiplyMag(highShelf.coefficients);
+            }
+            else if (summingMode == Summing_Maximum)
+            {
+                bandMag = 0.0;
+                auto updateMax = [&](const Coefficients& coeffs) {
+                    if (coeffs != nullptr) bandMag = juce::jmax(bandMag, coeffs->getMagnitudeForFrequency(freq, sampleRate));
+                };
+                if (!chain.isBypassed<ChainPositions::LowShelf>()) updateMax(lowShelf.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak1>())    updateMax(peak1.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak2>())    updateMax(peak2.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak3>())    updateMax(peak3.coefficients);
+                if (!chain.isBypassed<ChainPositions::HighShelf>()) updateMax(highShelf.coefficients);
+            }
+            else
+            {
+                std::complex<double> parallelSum(0.0, 0.0);
+                auto addResponse = [&](const Coefficients& coeffs) {
+                    if (coeffs != nullptr) parallelSum += getComplexResponse(coeffs, freq, sampleRate);
+                };
+                if (!chain.isBypassed<ChainPositions::LowShelf>()) addResponse(lowShelf.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak1>())    addResponse(peak1.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak2>())    addResponse(peak2.coefficients);
+                if (!chain.isBypassed<ChainPositions::Peak3>())    addResponse(peak3.coefficients);
+                if (!chain.isBypassed<ChainPositions::HighShelf>()) addResponse(highShelf.coefficients);
+
+                if (summingMode == Summing_Average) parallelSum /= 5.0;
+                bandMag = std::abs(parallelSum);
+            }
+
+            mags[i] = Decibels::gainToDecibels(cutMag * bandMag);
         }
-        else if (summingMode == Summing_Maximum)
-        {
-            bandMag = 0.0;
-            auto updateMax = [&](const Coefficients& coeffs) {
-                if (coeffs != nullptr)
-                    bandMag = juce::jmax(bandMag, coeffs->getMagnitudeForFrequency(freq, sampleRate));
-            };
-            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) updateMax(lowShelf.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak1>())    updateMax(peak1.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak2>())    updateMax(peak2.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak3>())    updateMax(peak3.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) updateMax(highShelf.coefficients);
-        }
-        else
-        {
-            // Average/Sum: sum complex responses of parallel bands
-            std::complex<double> parallelSum(0.0, 0.0);
-            auto addResponse = [&](const Coefficients& coeffs) {
-                if (coeffs != nullptr)
-                    parallelSum += getComplexResponse(coeffs, freq, sampleRate);
-            };
-            if (!monoChain.isBypassed<ChainPositions::LowShelf>()) addResponse(lowShelf.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak1>())    addResponse(peak1.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak2>())    addResponse(peak2.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::Peak3>())    addResponse(peak3.coefficients);
-            if (!monoChain.isBypassed<ChainPositions::HighShelf>()) addResponse(highShelf.coefficients);
-
-            if (summingMode == Summing_Average)
-                parallelSum /= 5.0;
-
-            bandMag = std::abs(parallelSum);
-        }
-
-        const double mag = cutMag * bandMag;
-        mags[i] = Decibels::gainToDecibels(mag);
-    }
-
-    Path responseCurve;
-    const double outputMin = responseArea.getBottom();
-    const double outputMax = responseArea.getY();
-    auto map = [outputMin, outputMax](double input)
-    {
-        return jmap(input, -24.0, 24.0, outputMin, outputMax);
     };
 
-    responseCurve.startNewSubPath(responseArea.getX(), map(mags.front()));
-    for (size_t i = 1; i < mags.size(); ++i)
+    std::vector<double> leftMags(w), rightMags(w);
+    calculateMags(leftChain, leftMags);
+    calculateMags(rightChain, rightMags);
+
+    auto drawCurve = [&](const std::vector<double>& mags, juce::Colour colour, float thickness, float alpha)
     {
-        responseCurve.lineTo(responseArea.getX() + i, map(mags[i]));
-    }
+        Path responseCurve;
+        const double outputMin = responseArea.getBottom();
+        const double outputMax = responseArea.getY();
+        auto map = [outputMin, outputMax](double input) {
+            return jmap(input, -24.0, 24.0, outputMin, outputMax);
+        };
+
+        responseCurve.startNewSubPath(responseArea.getX(), map(mags.front()));
+        for (size_t i = 1; i < mags.size(); ++i) {
+            responseCurve.lineTo(responseArea.getX() + i, map(mags[i]));
+        }
+
+        g.setColour(colour.withAlpha(alpha));
+        g.strokePath(responseCurve, PathStrokeType(thickness));
+    };
+
+    drawCurve(leftMags, juce::Colours::white, 2.5f, 1.0f);
+    drawCurve(rightMags, juce::Colours::yellow, 1.5f, 0.6f);
 
     // Draw the response curve with a glow effect
     g.setColour(Colours::aqua);
@@ -440,31 +438,18 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
 EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p),
       responseCurveComponent(audioProcessor),
-        lowCutFreqSliderAttachment(audioProcessor.apvts, "LowCut Freq", lowCutFreqSlider),
-        lowCutSlopeSliderAttachment(audioProcessor.apvts, "LowCut Slope", lowCutSlopeSlider),
-        lowCutQualitySliderAttachment(audioProcessor.apvts, "LowCut Quality", lowCutQualitySlider),
-        lowShelfFreqSliderAttachment(audioProcessor.apvts, "LowShelf Freq", lowShelfFreqSlider),
-        lowShelfGainSliderAttachment(audioProcessor.apvts, "LowShelf Gain", lowShelfGainSlider),
-        lowShelfQualitySliderAttachment(audioProcessor.apvts, "LowShelf Quality", lowShelfQualitySlider),
-        peakFreqSlider1Attachment(audioProcessor.apvts, "Peak1 Freq", peakFreq1Slider),
-        peakGainSlider1Attachment(audioProcessor.apvts, "Peak1 Gain", peakGain1Slider),
-        peakQualitySlider1Attachment(audioProcessor.apvts, "Peak1 Quality", peakQuality1Slider),
-        peakFreqSlider2Attachment(audioProcessor.apvts, "Peak2 Freq", peakFreq2Slider),
-        peakGainSlider2Attachment(audioProcessor.apvts, "Peak2 Gain", peakGain2Slider),
-        peakQualitySlider2Attachment(audioProcessor.apvts, "Peak2 Quality", peakQuality2Slider),
-        peakFreqSlider3Attachment(audioProcessor.apvts, "Peak3 Freq", peakFreq3Slider),
-        peakGainSlider3Attachment(audioProcessor.apvts, "Peak3 Gain", peakGain3Slider),
-        peakQualitySlider3Attachment(audioProcessor.apvts, "Peak3 Quality", peakQuality3Slider),
-        highShelfFreqSliderAttachment(audioProcessor.apvts, "HighShelf Freq", highShelfFreqSlider),
-        highShelfGainSliderAttachment(audioProcessor.apvts, "HighShelf Gain", highShelfGainSlider),
-        highShelfQualitySliderAttachment(audioProcessor.apvts, "HighShelf Quality", highShelfQualitySlider),
-        highCutFreqSliderAttachment(audioProcessor.apvts, "HighCut Freq", highCutFreqSlider),
-        highCutSlopeSliderAttachment(audioProcessor.apvts, "HighCut Slope", highCutSlopeSlider),
-          highCutQualitySliderAttachment(audioProcessor.apvts, "HighCut Quality", highCutQualitySlider),
         makeupGainSliderAttachment(audioProcessor.apvts, "Makeup Gain", makeupGainSlider),
         summingModeAttachment(audioProcessor.apvts, "Summing Mode", summingModeCombo),
-        processingModeAttachment(audioProcessor.apvts, "Processing Mode", processingModeCombo)
+        processingModeAttachment(audioProcessor.apvts, "Processing Mode", processingModeCombo),
+        stereoLinkAttachment(audioProcessor.apvts, "Stereo Link", linkButton)
 {
+    leftMidButton.setButtonText("Left / Mid");
+    rightSideButton.setButtonText("Right / Side");
+    linkButton.setButtonText("Link");
+    
+    leftMidButton.onClick = [this] { currentChannelView = Left_Mid; updateAttachments(); updateButtonStates(); };
+    rightSideButton.onClick = [this] { currentChannelView = Right_Side; updateAttachments(); updateButtonStates(); };
+
     summingModeCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colours::black);
     summingModeCombo.setColour(juce::ComboBox::textColourId, juce::Colours::white);
     summingModeCombo.setColour(juce::ComboBox::outlineColourId, juce::Colours::white.withAlpha(0.3f));
@@ -490,13 +475,68 @@ EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
         processingModeCombo.addItemList({ "Left/Right", "Mid/Side" }, 1);
     }
     processingModeCombo.setSelectedItemIndex(static_cast<int>(audioProcessor.apvts.getRawParameterValue("Processing Mode")->load()), juce::dontSendNotification);
+    
+    processingModeCombo.onChange = [this] { updateButtonStates(); };
 
     for (auto* comp : getComps())
     {
         addAndMakeVisible(comp);
     }
+    
+    updateAttachments();
+    updateButtonStates();
+
     setWantsKeyboardFocus(true);
     setSize(1000, 650);
+}
+
+void EQoonAudioProcessorEditor::updateAttachments()
+{
+    juce::String prefix = (currentChannelView == Left_Mid) ? "L " : "R ";
+    
+    auto& apvts = audioProcessor.apvts;
+    
+    lowCutFreqSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowCut Freq", lowCutFreqSlider);
+    lowCutSlopeSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowCut Slope", lowCutSlopeSlider);
+    lowCutQualitySliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowCut Quality", lowCutQualitySlider);
+    
+    lowShelfFreqSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowShelf Freq", lowShelfFreqSlider);
+    lowShelfGainSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowShelf Gain", lowShelfGainSlider);
+    lowShelfQualitySliderAttachment = std::make_unique<Attachment>(apvts, prefix + "LowShelf Quality", lowShelfQualitySlider);
+    
+    peakFreqSlider1Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak1 Freq", peakFreq1Slider);
+    peakGainSlider1Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak1 Gain", peakGain1Slider);
+    peakQualitySlider1Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak1 Quality", peakQuality1Slider);
+    
+    peakFreqSlider2Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak2 Freq", peakFreq2Slider);
+    peakGainSlider2Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak2 Gain", peakGain2Slider);
+    peakQualitySlider2Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak2 Quality", peakQuality2Slider);
+    
+    peakFreqSlider3Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak3 Freq", peakFreq3Slider);
+    peakGainSlider3Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak3 Gain", peakGain3Slider);
+    peakQualitySlider3Attachment = std::make_unique<Attachment>(apvts, prefix + "Peak3 Quality", peakQuality3Slider);
+    
+    highShelfFreqSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighShelf Freq", highShelfFreqSlider);
+    highShelfGainSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighShelf Gain", highShelfGainSlider);
+    highShelfQualitySliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighShelf Quality", highShelfQualitySlider);
+    
+    highCutFreqSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighCut Freq", highCutFreqSlider);
+    highCutSlopeSliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighCut Slope", highCutSlopeSlider);
+    highCutQualitySliderAttachment = std::make_unique<Attachment>(apvts, prefix + "HighCut Quality", highCutQualitySlider);
+}
+
+void EQoonAudioProcessorEditor::updateButtonStates()
+{
+    bool isMS = processingModeCombo.getSelectedItemIndex() == 1;
+    
+    leftMidButton.setButtonText(isMS ? "MID" : "LEFT");
+    rightSideButton.setButtonText(isMS ? "SIDE" : "RIGHT");
+    
+    leftMidButton.setToggleState(currentChannelView == Left_Mid, juce::dontSendNotification);
+    rightSideButton.setToggleState(currentChannelView == Right_Side, juce::dontSendNotification);
+    
+    leftMidButton.setColour(juce::TextButton::buttonColourId, currentChannelView == Left_Mid ? juce::Colours::aqua : juce::Colours::black);
+    rightSideButton.setColour(juce::TextButton::buttonColourId, currentChannelView == Right_Side ? juce::Colours::aqua : juce::Colours::black);
 }
 
 EQoonAudioProcessorEditor::~EQoonAudioProcessorEditor()
@@ -773,9 +813,16 @@ void EQoonAudioProcessorEditor::resized()
         int padding = 1;
 
         auto area = makeupRow;
-        auto comboArea = area.removeFromLeft(nameWidth + labelWidth);
-        summingModeCombo.setBounds(comboArea.removeFromTop(comboArea.getHeight()/2).reduced(2, 2));
-        processingModeCombo.setBounds(comboArea.reduced(2, 2));
+        
+        auto buttonArea = area.removeFromLeft(nameWidth + labelWidth);
+        auto modeArea = buttonArea.removeFromTop(buttonArea.getHeight() / 2);
+        summingModeCombo.setBounds(modeArea.removeFromLeft(modeArea.getWidth() / 2).reduced(2, 2));
+        processingModeCombo.setBounds(modeArea.reduced(2, 2));
+        
+        auto selectorArea = buttonArea;
+        leftMidButton.setBounds(selectorArea.removeFromLeft(selectorArea.getWidth() / 3).reduced(2, 2));
+        rightSideButton.setBounds(selectorArea.removeFromLeft(selectorArea.getWidth() / 2).reduced(2, 2));
+        linkButton.setBounds(selectorArea.reduced(2, 2));
 
         auto valueArea = area.removeFromRight(valueWidth);
         makeupGainValue.setBounds(valueArea.reduced(0, 1));
@@ -819,6 +866,7 @@ std::vector<juce::Component*> EQoonAudioProcessorEditor::getComps()
         &makeupGainLabel,
         
         &summingModeCombo, &processingModeCombo,
+        &leftMidButton, &rightSideButton, &linkButton,
         &responseCurveComponent
     };
 }

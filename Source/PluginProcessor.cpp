@@ -134,9 +134,44 @@ void EQoonAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     updateFilters();
 }
 
-void EQoonAudioProcessor::parameterValueChanged(int, float)
+void EQoonAudioProcessor::parameterValueChanged(int parameterIndex, float newValue)
 {
     parametersChanged.store(true, std::memory_order_release);
+
+    if (isUpdating.exchange(true)) return;
+
+    if (auto* linkParam = apvts.getRawParameterValue("Stereo Link"))
+    {
+        if (linkParam->load() > 0.5f)
+        {
+            const auto& params = getParameters();
+            if (parameterIndex >= 0 && parameterIndex < params.size())
+            {
+                if (auto* param = dynamic_cast<juce::AudioProcessorParameterWithID*>(params[parameterIndex]))
+                {
+                    juce::String id = param->paramID;
+                    juce::String otherId;
+
+                    if (id.startsWith("L "))
+                        otherId = "R " + id.substring(2);
+                    else if (id.startsWith("R "))
+                        otherId = "L " + id.substring(2);
+
+                    if (otherId.isNotEmpty())
+                    {
+                        if (auto* otherParam = apvts.getParameter(otherId))
+                        {
+                            if (std::abs(otherParam->getValue() - newValue) > 0.0001f)
+                            {
+                                otherParam->setValueNotifyingHost(newValue);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    isUpdating.store(false);
 }
 
 void EQoonAudioProcessor::releaseResources()
@@ -364,128 +399,124 @@ void EQoonAudioProcessor::setStateInformation (const void* data, int sizeInBytes
     }
 }
 
-ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts)
+ChannelSettings getChannelSettings(juce::AudioProcessorValueTreeState& apvts, const juce::String& prefix)
 {
-    ChainSettings settings;
-    settings.lowCutFreq = apvts.getRawParameterValue("LowCut Freq")->load();
-    settings.lowCutSlope = static_cast<Slope>(apvts.getRawParameterValue("LowCut Slope")->load());
-    settings.lowCutQuality = apvts.getRawParameterValue("LowCut Quality")->load();
-    settings.lowShelfFreq = apvts.getRawParameterValue("LowShelf Freq")->load();
-    settings.lowShelfGainInDecibels = apvts.getRawParameterValue("LowShelf Gain")->load();
-    settings.lowShelfQuality = apvts.getRawParameterValue("LowShelf Quality")->load();
-    settings.peakFreq1 = apvts.getRawParameterValue("Peak1 Freq")->load();
-    settings.peakGainInDecibels1 = apvts.getRawParameterValue("Peak1 Gain")->load();
-    settings.peakQuality1 = apvts.getRawParameterValue("Peak1 Quality")->load();
-    settings.peakFreq2 = apvts.getRawParameterValue("Peak2 Freq")->load();
-    settings.peakGainInDecibels2 = apvts.getRawParameterValue("Peak2 Gain")->load();
-    settings.peakQuality2 = apvts.getRawParameterValue("Peak2 Quality")->load();
-    settings.peakFreq3 = apvts.getRawParameterValue("Peak3 Freq")->load();
-    settings.peakGainInDecibels3 = apvts.getRawParameterValue("Peak3 Gain")->load();
-    settings.peakQuality3 = apvts.getRawParameterValue("Peak3 Quality")->load();
-    settings.highShelfFreq = apvts.getRawParameterValue("HighShelf Freq")->load();
-    settings.highShelfGainInDecibels = apvts.getRawParameterValue("HighShelf Gain")->load();
-    settings.highShelfQuality = apvts.getRawParameterValue("HighShelf Quality")->load();
-    settings.highCutFreq = apvts.getRawParameterValue("HighCut Freq")->load();
-    settings.highCutSlope = static_cast<Slope>(apvts.getRawParameterValue("HighCut Slope")->load());
-    settings.highCutQuality = apvts.getRawParameterValue("HighCut Quality")->load();
-    settings.makeupGainDb = apvts.getRawParameterValue("Makeup Gain")->load();
-    {
-        const int summingIndex = juce::jlimit(0, 3, static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load()));
-        settings.summingMode = static_cast<SummingMode>(summingIndex);
-    }
-    {
-        const int processingIndex = juce::jlimit(0, 1, static_cast<int>(apvts.getRawParameterValue("Processing Mode")->load()));
-        settings.processingMode = static_cast<ProcessingMode>(processingIndex);
-    }
+    ChannelSettings settings;
+    settings.lowCutFreq = apvts.getRawParameterValue(prefix + "LowCut Freq")->load();
+    settings.lowCutSlope = static_cast<Slope>(apvts.getRawParameterValue(prefix + "LowCut Slope")->load());
+    settings.lowCutQuality = apvts.getRawParameterValue(prefix + "LowCut Quality")->load();
+    settings.lowShelfFreq = apvts.getRawParameterValue(prefix + "LowShelf Freq")->load();
+    settings.lowShelfGainInDecibels = apvts.getRawParameterValue(prefix + "LowShelf Gain")->load();
+    settings.lowShelfQuality = apvts.getRawParameterValue(prefix + "LowShelf Quality")->load();
+    settings.peakFreq1 = apvts.getRawParameterValue(prefix + "Peak1 Freq")->load();
+    settings.peakGainInDecibels1 = apvts.getRawParameterValue(prefix + "Peak1 Gain")->load();
+    settings.peakQuality1 = apvts.getRawParameterValue(prefix + "Peak1 Quality")->load();
+    settings.peakFreq2 = apvts.getRawParameterValue(prefix + "Peak2 Freq")->load();
+    settings.peakGainInDecibels2 = apvts.getRawParameterValue(prefix + "Peak2 Gain")->load();
+    settings.peakQuality2 = apvts.getRawParameterValue(prefix + "Peak2 Quality")->load();
+    settings.peakFreq3 = apvts.getRawParameterValue(prefix + "Peak3 Freq")->load();
+    settings.peakGainInDecibels3 = apvts.getRawParameterValue(prefix + "Peak3 Gain")->load();
+    settings.peakQuality3 = apvts.getRawParameterValue(prefix + "Peak3 Quality")->load();
+    settings.highShelfFreq = apvts.getRawParameterValue(prefix + "HighShelf Freq")->load();
+    settings.highShelfGainInDecibels = apvts.getRawParameterValue(prefix + "HighShelf Gain")->load();
+    settings.highShelfQuality = apvts.getRawParameterValue(prefix + "HighShelf Quality")->load();
+    settings.highCutFreq = apvts.getRawParameterValue(prefix + "HighCut Freq")->load();
+    settings.highCutSlope = static_cast<Slope>(apvts.getRawParameterValue(prefix + "HighCut Slope")->load());
+    settings.highCutQuality = apvts.getRawParameterValue(prefix + "HighCut Quality")->load();
     return settings;
 }
 
-Coefficients makePeakFilter(const ChainSettings& chainSettings, double sampleRate, int peakIndex)
+ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts)
+{
+    ChainSettings settings;
+    settings.left = getChannelSettings(apvts, "L ");
+    settings.right = getChannelSettings(apvts, "R ");
+    settings.makeupGainDb = apvts.getRawParameterValue("Makeup Gain")->load();
+    settings.summingMode = static_cast<SummingMode>(juce::jlimit(0, 3, static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load())));
+    settings.processingMode = static_cast<ProcessingMode>(juce::jlimit(0, 1, static_cast<int>(apvts.getRawParameterValue("Processing Mode")->load())));
+    settings.stereoLink = apvts.getRawParameterValue("Stereo Link")->load() > 0.5f;
+    return settings;
+}
+
+Coefficients makePeakFilter(const ChannelSettings& channelSettings, double sampleRate, int peakIndex)
 {
     switch (peakIndex)
     {
         case 1:
             return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, chainSettings.peakFreq1, chainSettings.peakQuality1, juce::Decibels::decibelsToGain(chainSettings.peakGainInDecibels1));
+                sampleRate, channelSettings.peakFreq1, channelSettings.peakQuality1, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels1));
         case 2:
             return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, chainSettings.peakFreq2, chainSettings.peakQuality2, juce::Decibels::decibelsToGain(chainSettings.peakGainInDecibels2));
+                sampleRate, channelSettings.peakFreq2, channelSettings.peakQuality2, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels2));
         case 3:
             return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, chainSettings.peakFreq3, chainSettings.peakQuality3, juce::Decibels::decibelsToGain(chainSettings.peakGainInDecibels3));
+                sampleRate, channelSettings.peakFreq3, channelSettings.peakQuality3, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels3));
         default:
             jassertfalse;
             return juce::dsp::IIR::Coefficients<float>::makePeakFilter(sampleRate, 1000.0f, 1.0f, 1.0f);
     }
 }
 
-Coefficients makeLowShelfFilter(const ChainSettings& chainSettings, double sampleRate)
+Coefficients makeLowShelfFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
     return juce::dsp::IIR::Coefficients<float>::makeLowShelf(sampleRate,
-                                                             chainSettings.lowShelfFreq,
-                                                             chainSettings.lowShelfQuality,
-                                                             juce::Decibels::decibelsToGain(chainSettings.lowShelfGainInDecibels));
+                                                             channelSettings.lowShelfFreq,
+                                                             channelSettings.lowShelfQuality,
+                                                             juce::Decibels::decibelsToGain(channelSettings.lowShelfGainInDecibels));
 }
 
-Coefficients makeHighShelfFilter(const ChainSettings& chainSettings, double sampleRate)
+Coefficients makeHighShelfFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
     return juce::dsp::IIR::Coefficients<float>::makeHighShelf(sampleRate,
-                                                              chainSettings.highShelfFreq,
-                                                              chainSettings.highShelfQuality,
-                                                              juce::Decibels::decibelsToGain(chainSettings.highShelfGainInDecibels));
+                                                              channelSettings.highShelfFreq,
+                                                              channelSettings.highShelfQuality,
+                                                              juce::Decibels::decibelsToGain(channelSettings.highShelfGainInDecibels));
 }
 
-void EQoonAudioProcessor::updatePeakFilters(const ChainSettings& chainSettings)
+void EQoonAudioProcessor::updatePeakFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
 {
-    auto peakCoefficients1 = makePeakFilter(chainSettings, getSampleRate(), 1);
-    updateCoefficients(leftPeak1.coefficients, peakCoefficients1);
-    updateCoefficients(rightPeak1.coefficients, peakCoefficients1);
+    updateCoefficients(leftPeak1.coefficients, makePeakFilter(leftSettings, getSampleRate(), 1));
+    updateCoefficients(rightPeak1.coefficients, makePeakFilter(rightSettings, getSampleRate(), 1));
 
-    auto peakCoefficients2 = makePeakFilter(chainSettings, getSampleRate(), 2);
-    updateCoefficients(leftPeak2.coefficients, peakCoefficients2);
-    updateCoefficients(rightPeak2.coefficients, peakCoefficients2);
+    updateCoefficients(leftPeak2.coefficients, makePeakFilter(leftSettings, getSampleRate(), 2));
+    updateCoefficients(rightPeak2.coefficients, makePeakFilter(rightSettings, getSampleRate(), 2));
 
-    auto peakCoefficients3 = makePeakFilter(chainSettings, getSampleRate(), 3);
-    updateCoefficients(leftPeak3.coefficients, peakCoefficients3);
-    updateCoefficients(rightPeak3.coefficients, peakCoefficients3);
+    updateCoefficients(leftPeak3.coefficients, makePeakFilter(leftSettings, getSampleRate(), 3));
+    updateCoefficients(rightPeak3.coefficients, makePeakFilter(rightSettings, getSampleRate(), 3));
 }
 
-void EQoonAudioProcessor::updateLowShelfFilter(const ChainSettings& chainSettings)
+void EQoonAudioProcessor::updateLowShelfFilter(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
 {
-    auto lowShelfCoefficients = makeLowShelfFilter(chainSettings, getSampleRate());
-    updateCoefficients(leftLowShelf.coefficients, lowShelfCoefficients);
-    updateCoefficients(rightLowShelf.coefficients, lowShelfCoefficients);
+    updateCoefficients(leftLowShelf.coefficients, makeLowShelfFilter(leftSettings, getSampleRate()));
+    updateCoefficients(rightLowShelf.coefficients, makeLowShelfFilter(rightSettings, getSampleRate()));
 }
 
-void EQoonAudioProcessor::updateHighShelfFilter(const ChainSettings& chainSettings)
+void EQoonAudioProcessor::updateHighShelfFilter(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
 {
-    auto highShelfCoefficients = makeHighShelfFilter(chainSettings, getSampleRate());
-    updateCoefficients(leftHighShelf.coefficients, highShelfCoefficients);
-    updateCoefficients(rightHighShelf.coefficients, highShelfCoefficients);
+    updateCoefficients(leftHighShelf.coefficients, makeHighShelfFilter(leftSettings, getSampleRate()));
+    updateCoefficients(rightHighShelf.coefficients, makeHighShelfFilter(rightSettings, getSampleRate()));
 }
 
-void EQoonAudioProcessor::updateLowCutFilters(const ChainSettings& chainSettings)
+void EQoonAudioProcessor::updateLowCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
 {
-    auto lowCutCoefficients = makeLowCutFilter(chainSettings, getSampleRate());
-    updateCutFilter(leftLowCutChain, lowCutCoefficients, chainSettings.lowCutSlope);
-    updateCutFilter(rightLowCutChain, lowCutCoefficients, chainSettings.lowCutSlope);
+    updateCutFilter(leftLowCutChain, makeLowCutFilter(leftSettings, getSampleRate()), leftSettings.lowCutSlope);
+    updateCutFilter(rightLowCutChain, makeLowCutFilter(rightSettings, getSampleRate()), rightSettings.lowCutSlope);
 }
 
-void EQoonAudioProcessor::updateHighCutFilters(const ChainSettings& chainSettings)
+void EQoonAudioProcessor::updateHighCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
 {
-    auto highCutCoefficients = makeHighCutFilter(chainSettings, getSampleRate());
-    updateCutFilter(leftHighCutChain, highCutCoefficients, chainSettings.highCutSlope);
-    updateCutFilter(rightHighCutChain, highCutCoefficients, chainSettings.highCutSlope);
+    updateCutFilter(leftHighCutChain, makeHighCutFilter(leftSettings, getSampleRate()), leftSettings.highCutSlope);
+    updateCutFilter(rightHighCutChain, makeHighCutFilter(rightSettings, getSampleRate()), rightSettings.highCutSlope);
 }
 
 void EQoonAudioProcessor::updateFilters()
 {
     auto chainSettings = getChainSettings(apvts);
-    updateLowCutFilters(chainSettings);
-    updatePeakFilters(chainSettings);
-    updateLowShelfFilter(chainSettings);
-    updateHighShelfFilter(chainSettings);
-    updateHighCutFilters(chainSettings);
+    updateLowCutFilters(chainSettings.left, chainSettings.right);
+    updatePeakFilters(chainSettings.left, chainSettings.right);
+    updateLowShelfFilter(chainSettings.left, chainSettings.right);
+    updateHighShelfFilter(chainSettings.left, chainSettings.right);
+    updateHighCutFilters(chainSettings.left, chainSettings.right);
     makeupGain.setGainDecibels(chainSettings.makeupGainDb);
 }
 
@@ -503,90 +534,38 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
         slopeSteep.add(str);
     }
 
-    layout.add(std::make_unique<juce::AudioParameterFloat>("LowCut Freq",
-                                                           "LowCut Freq",
-                                                           juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f),
-                                                           20.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("LowCut Quality",
-                                                           "LowCut Quality",
-                                                           juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f),
-                                                           1.f));
-    layout.add(std::make_unique<juce::AudioParameterChoice>("LowCut Slope", "LowCut Slope", slopeSteep, 0));
+    auto addParams = [&](const juce::String& prefix)
+    {
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "LowCut Freq", prefix + "LowCut Freq", juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f), 20.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "LowCut Quality", prefix + "LowCut Quality", juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f), 1.f));
+        layout.add(std::make_unique<juce::AudioParameterChoice>(prefix + "LowCut Slope", prefix + "LowCut Slope", slopeSteep, 0));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "LowShelf Freq", prefix + "LowShelf Freq", juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f), 200.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "LowShelf Gain", prefix + "LowShelf Gain", juce::NormalisableRange<float>(-24.f, 24.f, 0.5f, 1.f), 0.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "LowShelf Quality", prefix + "LowShelf Quality", juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f), 1.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak1 Freq", prefix + "Peak1 Freq", juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f), 750.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak1 Gain", prefix + "Peak1 Gain", -24.0f, 24.0f, 0.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak1 Quality", prefix + "Peak1 Quality", 0.1f, 10.0f, 1.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak2 Freq", prefix + "Peak2 Freq", juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f), 1500.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak2 Gain", prefix + "Peak2 Gain", -24.0f, 24.0f, 0.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak2 Quality", prefix + "Peak2 Quality", 0.1f, 10.0f, 1.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak3 Freq", prefix + "Peak3 Freq", juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f), 3000.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak3 Gain", prefix + "Peak3 Gain", -24.0f, 24.0f, 0.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "Peak3 Quality", prefix + "Peak3 Quality", 0.1f, 10.0f, 1.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "HighShelf Freq", prefix + "HighShelf Freq", juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f), 10000.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "HighShelf Gain", prefix + "HighShelf Gain", juce::NormalisableRange<float>(-24.f, 24.f, 0.5f, 1.f), 0.0f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "HighShelf Quality", prefix + "HighShelf Quality", juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f), 1.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "HighCut Freq", prefix + "HighCut Freq", juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f), 20000.f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(prefix + "HighCut Quality", prefix + "HighCut Quality", juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f), 1.f));
+        layout.add(std::make_unique<juce::AudioParameterChoice>(prefix + "HighCut Slope", prefix + "HighCut Slope", slopeSteep, 0));
+    };
 
-    layout.add(std::make_unique<juce::AudioParameterFloat>("LowShelf Freq",
-                                                           "LowShelf Freq",
-                                                           juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f),
-                                                           200.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("LowShelf Gain",
-                                                           "LowShelf Gain",
-                                                           juce::NormalisableRange<float>(-24.f, 24.f, 0.5f, 1.f),
-                                                           0.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("LowShelf Quality",
-                                                           "LowShelf Quality",
-                                                           juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f),
-                                                           1.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak1 Freq",
-                                                           "Peak1 Freq",
-                                                           juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f),
-                                                           750.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak1 Gain",
-                                                           "Peak1 Gain",
-                                                           -24.0f, 24.0f, 0.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak1 Quality",
-                                                           "Peak1 Quality",
-                                                           0.1f, 10.0f, 1.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak2 Freq",
-                                                           "Peak2 Freq",
-                                                           juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f),
-                                                           1500.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak2 Gain",
-                                                           "Peak2 Gain",
-                                                           -24.0f, 24.0f, 0.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak2 Quality",
-                                                           "Peak2 Quality",
-                                                           0.1f, 10.0f, 1.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak3 Freq",
-                                                           "Peak3 Freq",
-                                                           juce::NormalisableRange<float>(20.0f, 20000.0f, 1.f, 0.3f),
-                                                           3000.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak3 Gain",
-                                                           "Peak3 Gain",
-                                                           -24.0f, 24.0f, 0.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Peak3 Quality",
-                                                           "Peak3 Quality",
-                                                           0.1f, 10.0f, 1.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("HighShelf Freq",
-                                                           "HighShelf Freq",
-                                                           juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f),
-                                                           10000.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("HighShelf Gain",
-                                                           "HighShelf Gain",
-                                                           juce::NormalisableRange<float>(-24.f, 24.f, 0.5f, 1.f),
-                                                           0.0f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("HighShelf Quality",
-                                                           "HighShelf Quality",
-                                                           juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f),
-                                                           1.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("HighCut Freq",
-                                                           "HighCut Freq",
-                                                           juce::NormalisableRange<float>(20.f, 20000.f, 1.f, 0.3f),
-                                                           20000.f));
-    layout.add(std::make_unique<juce::AudioParameterFloat>("HighCut Quality",
-                                                           "HighCut Quality",
-                                                           juce::NormalisableRange<float>(0.1f, 10.f, 0.05f, 1.f),
-                                                           1.f));
-    layout.add(std::make_unique<juce::AudioParameterChoice>("HighCut Slope", "HighCut Slope", slopeSteep, 0));
+    addParams("L ");
+    addParams("R ");
 
-    juce::StringArray summingModes = { "Classic", "Average", "Sum", "Maximum" };
-    layout.add(std::make_unique<juce::AudioParameterChoice>("Summing Mode", "Summing Mode", summingModes, 0));
-
-    juce::StringArray processingModes = { "Left/Right", "Mid/Side" };
-    layout.add(std::make_unique<juce::AudioParameterChoice>("Processing Mode", "Processing Mode", processingModes, 0));
-
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Makeup Gain",
-                                                           "Makeup Gain",
-                                                           juce::NormalisableRange<float>(-12.f, 12.f, 0.1f, 1.f),
-                                                           0.0f));
+    layout.add(std::make_unique<juce::AudioParameterChoice>("Summing Mode", "Summing Mode", juce::StringArray{ "Classic", "Average", "Sum", "Maximum" }, 0));
+    layout.add(std::make_unique<juce::AudioParameterChoice>("Processing Mode", "Processing Mode", juce::StringArray{ "Left/Right", "Mid/Side" }, 0));
+    layout.add(std::make_unique<juce::AudioParameterBool>("Stereo Link", "Stereo Link", true));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("Makeup Gain", "Makeup Gain", juce::NormalisableRange<float>(-12.f, 12.f, 0.1f, 1.f), 0.0f));
 
     return layout;
 }

@@ -27,7 +27,7 @@ enum ProcessingMode
     Processing_MS
 };
 
-struct ChainSettings
+struct ChannelSettings
 {
     float peakFreq1 { 750.f }, peakGainInDecibels1 { 0 }, peakQuality1 {1.f};
     float peakFreq2 { 1500.f }, peakGainInDecibels2 { 0 }, peakQuality2 {1.f};
@@ -36,9 +36,15 @@ struct ChainSettings
     float lowShelfFreq { 0 }, lowShelfGainInDecibels { 0 }, lowShelfQuality {1.f};
     float highShelfFreq { 0 }, highShelfGainInDecibels { 0 }, highShelfQuality {1.f};
     Slope lowCutSlope { Slope::Slope_12 }, highCutSlope { Slope::Slope_12 };
+};
+
+struct ChainSettings
+{
+    ChannelSettings left, right;
     float makeupGainDb { 0.0f };
     SummingMode summingMode { Summing_Classic };
     ProcessingMode processingMode { Processing_LR };
+    bool stereoLink { true };
 };
 
 ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts);
@@ -60,11 +66,11 @@ enum ChainPositions
     HighShelf,
     HighCut
 };
-Coefficients makePeakFilter(const ChainSettings& chainSettings, double sampleRate, int peakIndex);
-Coefficients makeLowShelfFilter(const ChainSettings& chainSettings, double sampleRate);
-Coefficients makeHighShelfFilter(const ChainSettings& chainSettings, double sampleRate);
-CoefficientsArray makeLowCutFilter(const ChainSettings& chainSettings, double sampleRate);
-CoefficientsArray makeHighCutFilter(const ChainSettings& chainSettings, double sampleRate);
+Coefficients makePeakFilter(const ChannelSettings& channelSettings, double sampleRate, int peakIndex);
+Coefficients makeLowShelfFilter(const ChannelSettings& channelSettings, double sampleRate);
+Coefficients makeHighShelfFilter(const ChannelSettings& channelSettings, double sampleRate);
+CoefficientsArray makeLowCutFilter(const ChannelSettings& channelSettings, double sampleRate);
+CoefficientsArray makeHighCutFilter(const ChannelSettings& channelSettings, double sampleRate);
 std::complex<double> getComplexResponse(const Coefficients& coeffs, double freq, double sampleRate);
 
 void updateCoefficients(Coefficients& old, const Coefficients& replacements);
@@ -104,10 +110,10 @@ void updateCutFilter(ChainType& chain, const CoefficientsArray& coefficientsArra
     updateCutFilterImpl(chain, coefficientsArray, numFiltersToEnable, std::make_index_sequence<4>{});
 }
 
-inline CoefficientsArray makeLowCutFilter(const ChainSettings& chainSettings, double sampleRate)
+inline CoefficientsArray makeLowCutFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
-    const float q = juce::jlimit(0.1f, 10.0f, chainSettings.lowCutQuality);
-    const int order = 2 * (static_cast<int>(chainSettings.lowCutSlope) + 1);
+    const float q = juce::jlimit(0.1f, 10.0f, channelSettings.lowCutQuality);
+    const int order = 2 * (static_cast<int>(channelSettings.lowCutSlope) + 1);
     
     // Create a vector to hold all the filter coefficients
     CoefficientsArray allCoeffs;
@@ -123,7 +129,7 @@ inline CoefficientsArray makeLowCutFilter(const ChainSettings& chainSettings, do
         
         auto coeffs = juce::dsp::IIR::Coefficients<float>::makeHighPass(
             sampleRate,
-            chainSettings.lowCutFreq,
+            channelSettings.lowCutFreq,
             sectionQ);
             
         allCoeffs.add(coeffs);
@@ -132,10 +138,10 @@ inline CoefficientsArray makeLowCutFilter(const ChainSettings& chainSettings, do
     return allCoeffs;
 }
 
-inline CoefficientsArray makeHighCutFilter(const ChainSettings& chainSettings, double sampleRate)
+inline CoefficientsArray makeHighCutFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
-    const float q = juce::jlimit(0.1f, 10.0f, chainSettings.highCutQuality);
-    const int order = 2 * (static_cast<int>(chainSettings.highCutSlope) + 1);
+    const float q = juce::jlimit(0.1f, 10.0f, channelSettings.highCutQuality);
+    const int order = 2 * (static_cast<int>(channelSettings.highCutSlope) + 1);
     
     // Create a vector to hold all the filter coefficients
     CoefficientsArray allCoeffs;
@@ -151,7 +157,7 @@ inline CoefficientsArray makeHighCutFilter(const ChainSettings& chainSettings, d
         
         auto coeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass(
             sampleRate,
-            chainSettings.highCutFreq,
+            channelSettings.highCutFreq,
             sectionQ);
             
         allCoeffs.add(coeffs);
@@ -222,6 +228,7 @@ public:
 
 private:
     std::atomic<bool> parametersChanged{ false };
+    std::atomic<bool> isUpdating{ false };
 
     // Cut filters (series, at the edges of the signal chain)
     CutFilter leftLowCutChain, rightLowCutChain;
@@ -245,11 +252,11 @@ private:
     juce::AudioBuffer<float> scratchRefBuf;
     juce::AudioBuffer<float> scratchTempBuf;
 
-    void updatePeakFilters(const ChainSettings& chainSettings);
-    void updateLowShelfFilter(const ChainSettings& chainSettings);
-    void updateHighShelfFilter(const ChainSettings& chainSettings);
-    void updateLowCutFilters(const ChainSettings& chainSettings);
-    void updateHighCutFilters(const ChainSettings& chainSettings);
+    void updatePeakFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
+    void updateLowShelfFilter(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
+    void updateHighShelfFilter(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
+    void updateLowCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
+    void updateHighCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
     void updateFilters();
     
 public:

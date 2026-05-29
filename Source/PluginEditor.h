@@ -45,7 +45,7 @@ private:
     std::vector<float> postEQFFTData;
     EQoonAudioProcessor& audioProcessor;
     juce::Atomic<bool> parametersChanged{false};
-    MonoChain monoChain;
+    MonoChain leftChain, rightChain;
 
     bool mouseOver { false };
     int mouseX { 0 };
@@ -120,20 +120,32 @@ private:
     void setupLabel(juce::Label& label, const juce::String& text);
     
     void drawBandRow(juce::Graphics& g, int bandIndex, const juce::Rectangle<int>& bounds);
+    
+    enum ChannelView { Left_Mid, Right_Side };
+    ChannelView currentChannelView { Left_Mid };
+    void updateAttachments();
+    void updateButtonStates();
+
     ResponseCurveComponent responseCurveComponent;
 
     using APVTS = juce::AudioProcessorValueTreeState;
     using Attachment = APVTS::SliderAttachment;
-    Attachment lowCutFreqSliderAttachment, lowCutSlopeSliderAttachment, lowCutQualitySliderAttachment;
-    Attachment lowShelfFreqSliderAttachment, lowShelfGainSliderAttachment, lowShelfQualitySliderAttachment;
-    Attachment peakFreqSlider1Attachment, peakGainSlider1Attachment, peakQualitySlider1Attachment;
-    Attachment peakFreqSlider2Attachment, peakGainSlider2Attachment, peakQualitySlider2Attachment;
-    Attachment peakFreqSlider3Attachment, peakGainSlider3Attachment, peakQualitySlider3Attachment;
-    Attachment highShelfFreqSliderAttachment, highShelfGainSliderAttachment, highShelfQualitySliderAttachment;
-    Attachment highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
+    
+    std::unique_ptr<Attachment> lowCutFreqSliderAttachment, lowCutSlopeSliderAttachment, lowCutQualitySliderAttachment;
+    std::unique_ptr<Attachment> lowShelfFreqSliderAttachment, lowShelfGainSliderAttachment, lowShelfQualitySliderAttachment;
+    std::unique_ptr<Attachment> peakFreqSlider1Attachment, peakGainSlider1Attachment, peakQualitySlider1Attachment;
+    std::unique_ptr<Attachment> peakFreqSlider2Attachment, peakGainSlider2Attachment, peakQualitySlider2Attachment;
+    std::unique_ptr<Attachment> peakFreqSlider3Attachment, peakGainSlider3Attachment, peakQualitySlider3Attachment;
+    std::unique_ptr<Attachment> highShelfFreqSliderAttachment, highShelfGainSliderAttachment, highShelfQualitySliderAttachment;
+    std::unique_ptr<Attachment> highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
+    
     Attachment makeupGainSliderAttachment;
     juce::AudioProcessorValueTreeState::ComboBoxAttachment summingModeAttachment;
     juce::AudioProcessorValueTreeState::ComboBoxAttachment processingModeAttachment;
+    juce::AudioProcessorValueTreeState::ButtonAttachment stereoLinkAttachment;
+
+    juce::TextButton leftMidButton, rightSideButton;
+    juce::ToggleButton linkButton;
 
     std::vector<juce::Component*> getComps();
     std::vector<juce::Component*> getValueLabels();
