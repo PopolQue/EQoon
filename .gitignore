@@ -8,3 +8,4 @@ install.sh
 **/.vscode
 **/build_test
 **/build
+default.profraw
