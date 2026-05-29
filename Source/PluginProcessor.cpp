@@ -188,6 +188,22 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         scratchTempBuf.setSize(1, numSamples, false, false, false);
     }
 
+    auto chainSettings = getChainSettings(apvts);
+
+    if (chainSettings.processingMode == Processing_MS && totalNumInputChannels == 2)
+    {
+        auto* leftCh = buffer.getWritePointer(0);
+        auto* rightCh = buffer.getWritePointer(1);
+        for (int s = 0; s < numSamples; ++s)
+        {
+            float l = leftCh[s];
+            float r = rightCh[s];
+            leftCh[s] = (l + r) * 0.70710678f; // Mid
+            rightCh[s] = (l - r) * 0.70710678f; // Side
+        }
+        DBG("MS Mode active");
+    }
+
     for (int ch = 0; ch < totalNumInputChannels; ++ch)
     {
         auto chBlock = block.getSingleChannelBlock(ch);
@@ -206,8 +222,6 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             auto ctx = juce::dsp::ProcessContextReplacing<float>(chBlock);
             lowCutChain.process(ctx);
         }
-
-        auto chainSettings = getChainSettings(apvts);
 
         if (chainSettings.summingMode == Summing_Classic)
         {
@@ -300,6 +314,19 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         }
     }
 
+    if (chainSettings.processingMode == Processing_MS && totalNumInputChannels == 2)
+    {
+        auto* midCh = buffer.getWritePointer(0);
+        auto* sideCh = buffer.getWritePointer(1);
+        for (int s = 0; s < numSamples; ++s)
+        {
+            float m = midCh[s];
+            float s_sig = sideCh[s];
+            midCh[s] = (m + s_sig) * 0.70710678f; // Left
+            sideCh[s] = (m - s_sig) * 0.70710678f; // Right
+        }
+    }
+
     // 6. Apply makeup gain to the full stereo result
     makeupGain.process(juce::dsp::ProcessContextReplacing<float>(block));
 
@@ -365,6 +392,10 @@ ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts)
     {
         const int summingIndex = juce::jlimit(0, 3, static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load()));
         settings.summingMode = static_cast<SummingMode>(summingIndex);
+    }
+    {
+        const int processingIndex = juce::jlimit(0, 1, static_cast<int>(apvts.getRawParameterValue("Processing Mode")->load()));
+        settings.processingMode = static_cast<ProcessingMode>(processingIndex);
     }
     return settings;
 }
@@ -548,6 +579,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
 
     juce::StringArray summingModes = { "Classic", "Average", "Sum", "Maximum" };
     layout.add(std::make_unique<juce::AudioParameterChoice>("Summing Mode", "Summing Mode", summingModes, 0));
+
+    juce::StringArray processingModes = { "Left/Right", "Mid/Side" };
+    layout.add(std::make_unique<juce::AudioParameterChoice>("Processing Mode", "Processing Mode", processingModes, 0));
 
     layout.add(std::make_unique<juce::AudioParameterFloat>("Makeup Gain",
                                                            "Makeup Gain",

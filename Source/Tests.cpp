@@ -12,6 +12,7 @@ public:
         runBandGainTests();
         runSummingModeTests();
         runCutFilterTests();
+        runProcessingModeTests();
     }
 
 private:
@@ -236,6 +237,30 @@ private:
                 sumAbs += std::abs(buffer.getSample(0, s));
 
             expect(sumAbs < 1.0f);
+        }
+    }
+    void runProcessingModeTests()
+    {
+        beginTest("Mid/Side mode conversion is functional");
+        {
+            auto proc = createProcessor();
+            setParameter(*proc, "Processing Mode", 1.0f); // Set to Mid/Side
+            
+            // Set gain for all bands to -24dB. Since L and R chains are processed 
+            // with these same coefficients, both Mid and Side are attenuated.
+            setParameter(*proc, "Peak1 Gain", -24.0f);
+
+            auto buffer = makeStereoBuffer();
+            // L=1, R=-1 -> Mid=0, Side=1.414.
+            buffer.setSample(0, 0, 1.0f);
+            buffer.setSample(1, 0, -1.0f);
+            
+            processImpulse(*proc, buffer);
+
+            // Both Mid and Side are heavily attenuated by -24dB gain.
+            // Therefore, the resulting L/R should be heavily attenuated.
+            
+            expectWithinAbsoluteError(std::abs(buffer.getSample(0, 0)), 0.05f, 0.05f);
         }
     }
 };

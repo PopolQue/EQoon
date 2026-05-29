@@ -21,6 +21,12 @@ enum SummingMode
     Summing_Maximum
 };
 
+enum ProcessingMode
+{
+    Processing_LR,
+    Processing_MS
+};
+
 struct ChainSettings
 {
     float peakFreq1 { 750.f }, peakGainInDecibels1 { 0 }, peakQuality1 {1.f};
@@ -32,6 +38,7 @@ struct ChainSettings
     Slope lowCutSlope { Slope::Slope_12 }, highCutSlope { Slope::Slope_12 };
     float makeupGainDb { 0.0f };
     SummingMode summingMode { Summing_Classic };
+    ProcessingMode processingMode { Processing_LR };
 };
 
 ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts);

@@ -74,6 +74,7 @@ private:
     CustomRotarySlider highCutFreqSlider, highCutSlopeSlider, highCutQualitySlider;
     CustomRotarySlider makeupGainSlider;
     juce::ComboBox summingModeCombo;
+    juce::ComboBox processingModeCombo;
     
     // Labels for sliders
     // Filter name labels
@@ -132,6 +133,7 @@ private:
     Attachment highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
     Attachment makeupGainSliderAttachment;
     juce::AudioProcessorValueTreeState::ComboBoxAttachment summingModeAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment processingModeAttachment;
 
     std::vector<juce::Component*> getComps();
     std::vector<juce::Component*> getValueLabels();

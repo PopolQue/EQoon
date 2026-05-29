@@ -462,7 +462,8 @@ EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
         highCutSlopeSliderAttachment(audioProcessor.apvts, "HighCut Slope", highCutSlopeSlider),
           highCutQualitySliderAttachment(audioProcessor.apvts, "HighCut Quality", highCutQualitySlider),
         makeupGainSliderAttachment(audioProcessor.apvts, "Makeup Gain", makeupGainSlider),
-        summingModeAttachment(audioProcessor.apvts, "Summing Mode", summingModeCombo)
+        summingModeAttachment(audioProcessor.apvts, "Summing Mode", summingModeCombo),
+        processingModeAttachment(audioProcessor.apvts, "Processing Mode", processingModeCombo)
 {
     summingModeCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colours::black);
     summingModeCombo.setColour(juce::ComboBox::textColourId, juce::Colours::white);
@@ -476,6 +477,19 @@ EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
         summingModeCombo.addItemList({ "Classic", "Average", "Sum", "Maximum" }, 1);
     }
     summingModeCombo.setSelectedItemIndex(static_cast<int>(audioProcessor.apvts.getRawParameterValue("Summing Mode")->load()), juce::dontSendNotification);
+
+    processingModeCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colours::black);
+    processingModeCombo.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+    processingModeCombo.setColour(juce::ComboBox::outlineColourId, juce::Colours::white.withAlpha(0.3f));
+    processingModeCombo.setColour(juce::ComboBox::buttonColourId, juce::Colours::white.withAlpha(0.5f));
+    processingModeCombo.setColour(juce::ComboBox::arrowColourId, juce::Colours::white.withAlpha(0.6f));
+    processingModeCombo.setJustificationType(juce::Justification::centred);
+    if (processingModeCombo.getNumItems() < 2)
+    {
+        processingModeCombo.clear();
+        processingModeCombo.addItemList({ "Left/Right", "Mid/Side" }, 1);
+    }
+    processingModeCombo.setSelectedItemIndex(static_cast<int>(audioProcessor.apvts.getRawParameterValue("Processing Mode")->load()), juce::dontSendNotification);
 
     for (auto* comp : getComps())
     {
@@ -760,7 +774,8 @@ void EQoonAudioProcessorEditor::resized()
 
         auto area = makeupRow;
         auto comboArea = area.removeFromLeft(nameWidth + labelWidth);
-        summingModeCombo.setBounds(comboArea.reduced(2, 4));
+        summingModeCombo.setBounds(comboArea.removeFromTop(comboArea.getHeight()/2).reduced(2, 2));
+        processingModeCombo.setBounds(comboArea.reduced(2, 2));
 
         auto valueArea = area.removeFromRight(valueWidth);
         makeupGainValue.setBounds(valueArea.reduced(0, 1));
@@ -803,7 +818,7 @@ std::vector<juce::Component*> EQoonAudioProcessorEditor::getComps()
         &highShelfFreqLabel, &highShelfGainLabel, &highShelfQualityLabel,
         &makeupGainLabel,
         
-        &summingModeCombo,
+        &summingModeCombo, &processingModeCombo,
         &responseCurveComponent
     };
 }
