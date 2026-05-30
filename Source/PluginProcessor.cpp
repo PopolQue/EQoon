@@ -224,6 +224,20 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     }
 
     auto chainSettings = getChainSettings(apvts);
+    
+    if (chainSettings.bypass)
+    {
+        if (totalNumInputChannels > 0 && postEQAnalyzer != nullptr)
+            postEQAnalyzer->processSamples(buffer, totalNumInputChannels);
+        return;
+    }
+    
+    // Debug: Calculate total signal energy in the buffer
+    float totalEnergy = 0.0f;
+    for(int ch=0; ch < buffer.getNumChannels(); ++ch)
+        for(int s=0; s < buffer.getNumSamples(); ++s)
+            totalEnergy += std::abs(buffer.getSample(ch, s));
+    DBG("processBlock energy: " << totalEnergy);
 
     if (chainSettings.processingMode == Processing_MS && totalNumInputChannels == 2)
     {
@@ -288,8 +302,8 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             // 2. Save post-LowCut as reference for parallel bands
             scratchRefBuf.copyFrom(0, 0, data, numSamples);
 
-            // 3. Clear output — we'll reconstruct from parallel bands
-            juce::FloatVectorOperations::fill(data, 0.0f, numSamples);
+            // 3. Initialize output with dry signal for parallel summing
+            juce::FloatVectorOperations::copy(data, scratchRefBuf.getReadPointer(0), numSamples);
 
             // 4. Process parallel bands according to summing mode
             switch (chainSettings.summingMode)
@@ -297,46 +311,56 @@ void EQoonAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
                 case Summing_Average:
                 case Summing_Sum:
             {
-                auto processAndSum = [&](juce::dsp::IIR::Filter<float>& filter)
+                auto processAndSum = [&](juce::dsp::IIR::Filter<float>& filter, float gainDb)
                 {
-                    scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
-                    auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
-                    filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
-                    juce::FloatVectorOperations::add(data, scratchTempBuf.getReadPointer(0), numSamples);
+                    // Only process if not flat (0dB)
+                    if (std::abs(gainDb) >= 0.001f)
+                    {
+                        scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
+                        auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
+                        filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
+                        juce::FloatVectorOperations::add(data, scratchTempBuf.getReadPointer(0), numSamples);
+                    }
                 };
 
-                processAndSum(lowShelf);
-                processAndSum(peak1);
-                processAndSum(peak2);
-                processAndSum(peak3);
-                processAndSum(highShelf);
+                processAndSum(lowShelf, (ch == 0) ? chainSettings.left.lowShelfGainInDecibels : chainSettings.right.lowShelfGainInDecibels);
+                processAndSum(peak1, (ch == 0) ? chainSettings.left.peakGainInDecibels1 : chainSettings.right.peakGainInDecibels1);
+                processAndSum(peak2, (ch == 0) ? chainSettings.left.peakGainInDecibels2 : chainSettings.right.peakGainInDecibels2);
+                processAndSum(peak3, (ch == 0) ? chainSettings.left.peakGainInDecibels3 : chainSettings.right.peakGainInDecibels3);
+                processAndSum(highShelf, (ch == 0) ? chainSettings.left.highShelfGainInDecibels : chainSettings.right.highShelfGainInDecibels);
 
                 if (chainSettings.summingMode == Summing_Average)
-                    juce::FloatVectorOperations::multiply(data, 1.0f / 5.0f, numSamples);
+                    juce::FloatVectorOperations::multiply(data, 1.0f / 6.0f, numSamples); // Divide by 6 (Dry + 5 bands)
                 break;
             }
 
             case Summing_Maximum:
             {
-                auto processAndMax = [&](juce::dsp::IIR::Filter<float>& filter)
+                auto processAndMax = [&](juce::dsp::IIR::Filter<float>& filter, float gainDb)
                 {
-                    scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
-                    auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
-                    filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
-                    for (int s = 0; s < numSamples; ++s)
-                        data[s] = juce::jmax(data[s], scratchTempBuf.getSample(0, s));
+                    // Only process if not flat (0dB)
+                    if (std::abs(gainDb) >= 0.001f)
+                    {
+                        scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
+                        auto tempBlock = juce::dsp::AudioBlock<float>(scratchTempBuf);
+                        filter.process(juce::dsp::ProcessContextReplacing<float>(tempBlock));
+                        
+                        for (int s = 0; s < numSamples; ++s)
+                            data[s] = juce::jmax(data[s], scratchTempBuf.getSample(0, s));
+                    }
                 };
 
-                scratchTempBuf.copyFrom(0, 0, scratchRefBuf.getReadPointer(0), numSamples);
-                {
-                    auto tb = juce::dsp::AudioBlock<float>(scratchTempBuf);
-                    lowShelf.process(juce::dsp::ProcessContextReplacing<float>(tb));
-                }
-                juce::FloatVectorOperations::copy(data, scratchTempBuf.getReadPointer(0), numSamples);
-                processAndMax(peak1);
-                processAndMax(peak2);
-                processAndMax(peak3);
-                processAndMax(highShelf);
+                auto& lowShelf = (ch == 0) ? leftLowShelf : rightLowShelf;
+                auto& peak1 = (ch == 0) ? leftPeak1 : rightPeak1;
+                auto& peak2 = (ch == 0) ? leftPeak2 : rightPeak2;
+                auto& peak3 = (ch == 0) ? leftPeak3 : rightPeak3;
+                auto& highShelf = (ch == 0) ? leftHighShelf : rightHighShelf;
+
+                processAndMax(lowShelf, (ch == 0) ? chainSettings.left.lowShelfGainInDecibels : chainSettings.right.lowShelfGainInDecibels);
+                processAndMax(peak1, (ch == 0) ? chainSettings.left.peakGainInDecibels1 : chainSettings.right.peakGainInDecibels1);
+                processAndMax(peak2, (ch == 0) ? chainSettings.left.peakGainInDecibels2 : chainSettings.right.peakGainInDecibels2);
+                processAndMax(peak3, (ch == 0) ? chainSettings.left.peakGainInDecibels3 : chainSettings.right.peakGainInDecibels3);
+                processAndMax(highShelf, (ch == 0) ? chainSettings.left.highShelfGainInDecibels : chainSettings.right.highShelfGainInDecibels);
                 break;
             }
         }
@@ -431,46 +455,51 @@ ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts)
     ChainSettings settings;
     settings.left = getChannelSettings(apvts, "L ");
     settings.right = getChannelSettings(apvts, "R ");
+    DBG("getChainSettings: Peak1 Freq L=" << settings.left.peakFreq1 << ", Gain L=" << settings.left.peakGainInDecibels1);
     settings.makeupGainDb = apvts.getRawParameterValue("Makeup Gain")->load();
     settings.summingMode = static_cast<SummingMode>(juce::jlimit(0, 3, static_cast<int>(apvts.getRawParameterValue("Summing Mode")->load())));
     settings.processingMode = static_cast<ProcessingMode>(juce::jlimit(0, 1, static_cast<int>(apvts.getRawParameterValue("Processing Mode")->load())));
     settings.stereoLink = apvts.getRawParameterValue("Stereo Link")->load() > 0.5f;
+    settings.bypass = apvts.getRawParameterValue("Bypass")->load() > 0.5f;
     return settings;
 }
 
 Coefficients makePeakFilter(const ChannelSettings& channelSettings, double sampleRate, int peakIndex)
 {
+    float freq, quality, gainDb;
     switch (peakIndex)
     {
-        case 1:
-            return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, channelSettings.peakFreq1, channelSettings.peakQuality1, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels1));
-        case 2:
-            return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, channelSettings.peakFreq2, channelSettings.peakQuality2, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels2));
-        case 3:
-            return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
-                sampleRate, channelSettings.peakFreq3, channelSettings.peakQuality3, juce::Decibels::decibelsToGain(channelSettings.peakGainInDecibels3));
-        default:
-            jassertfalse;
-            return juce::dsp::IIR::Coefficients<float>::makePeakFilter(sampleRate, 1000.0f, 1.0f, 1.0f);
+        case 1: freq = channelSettings.peakFreq1; quality = channelSettings.peakQuality1; gainDb = channelSettings.peakGainInDecibels1; break;
+        case 2: freq = channelSettings.peakFreq2; quality = channelSettings.peakQuality2; gainDb = channelSettings.peakGainInDecibels2; break;
+        case 3: freq = channelSettings.peakFreq3; quality = channelSettings.peakQuality3; gainDb = channelSettings.peakGainInDecibels3; break;
+        default: jassertfalse; return juce::dsp::IIR::Coefficients<float>::makePeakFilter(sampleRate, 1000.0f, 1.0f, 1.0f);
     }
+    
+    // Sanitize
+    freq = juce::jlimit(20.0f, 20000.0f, freq);
+    quality = juce::jlimit(0.1f, 10.0f, quality);
+    gainDb = juce::jlimit(-24.0f, 24.0f, gainDb);
+    
+    return juce::dsp::IIR::Coefficients<float>::makePeakFilter(
+        sampleRate, freq, quality, juce::Decibels::decibelsToGain(gainDb));
 }
 
 Coefficients makeLowShelfFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
-    return juce::dsp::IIR::Coefficients<float>::makeLowShelf(sampleRate,
-                                                             channelSettings.lowShelfFreq,
-                                                             channelSettings.lowShelfQuality,
-                                                             juce::Decibels::decibelsToGain(channelSettings.lowShelfGainInDecibels));
+    float freq = juce::jlimit(20.0f, 20000.0f, channelSettings.lowShelfFreq);
+    float quality = juce::jlimit(0.1f, 10.0f, channelSettings.lowShelfQuality);
+    float gainDb = juce::jlimit(-24.0f, 24.0f, channelSettings.lowShelfGainInDecibels);
+    
+    return juce::dsp::IIR::Coefficients<float>::makeLowShelf(sampleRate, freq, quality, juce::Decibels::decibelsToGain(gainDb));
 }
 
 Coefficients makeHighShelfFilter(const ChannelSettings& channelSettings, double sampleRate)
 {
-    return juce::dsp::IIR::Coefficients<float>::makeHighShelf(sampleRate,
-                                                              channelSettings.highShelfFreq,
-                                                              channelSettings.highShelfQuality,
-                                                              juce::Decibels::decibelsToGain(channelSettings.highShelfGainInDecibels));
+    float freq = juce::jlimit(20.0f, 20000.0f, channelSettings.highShelfFreq);
+    float quality = juce::jlimit(0.1f, 10.0f, channelSettings.highShelfQuality);
+    float gainDb = juce::jlimit(-24.0f, 24.0f, channelSettings.highShelfGainInDecibels);
+    
+    return juce::dsp::IIR::Coefficients<float>::makeHighShelf(sampleRate, freq, quality, juce::Decibels::decibelsToGain(gainDb));
 }
 
 void EQoonAudioProcessor::updatePeakFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings)
@@ -512,6 +541,7 @@ void EQoonAudioProcessor::updateHighCutFilters(const ChannelSettings& leftSettin
 void EQoonAudioProcessor::updateFilters()
 {
     auto chainSettings = getChainSettings(apvts);
+    DBG("Updating filters. Peak1 Freq: " << chainSettings.left.peakFreq1 << ", Gain: " << chainSettings.left.peakGainInDecibels1);
     updateLowCutFilters(chainSettings.left, chainSettings.right);
     updatePeakFilters(chainSettings.left, chainSettings.right);
     updateLowShelfFilter(chainSettings.left, chainSettings.right);
@@ -562,6 +592,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
     addParams("L ");
     addParams("R ");
 
+    layout.add(std::make_unique<juce::AudioParameterBool>("Bypass", "Bypass", false));
     layout.add(std::make_unique<juce::AudioParameterChoice>("Summing Mode", "Summing Mode", juce::StringArray{ "Classic", "Average", "Sum", "Maximum" }, 0));
     layout.add(std::make_unique<juce::AudioParameterChoice>("Processing Mode", "Processing Mode", juce::StringArray{ "Left/Right", "Mid/Side" }, 0));
     layout.add(std::make_unique<juce::AudioParameterBool>("Stereo Link", "Stereo Link", true));
@@ -574,6 +605,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout EQoonAudioProcessor::createP
 
 //==============================================================================
 // This creates new instances of the plugin..
+void EQoonAudioProcessor::reset()
+{
+    leftLowShelf.reset(); rightLowShelf.reset();
+    leftPeak1.reset(); rightPeak1.reset();
+    leftPeak2.reset(); rightPeak2.reset();
+    leftPeak3.reset(); rightPeak3.reset();
+    leftHighShelf.reset(); rightHighShelf.reset();
+    leftLowCutChain.reset(); rightLowCutChain.reset();
+    leftHighCutChain.reset(); rightHighCutChain.reset();
+}
+//...
 #ifndef EQOON_TEST_BUILD
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {

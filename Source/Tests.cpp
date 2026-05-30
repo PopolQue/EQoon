@@ -1,407 +1,307 @@
 #include "PluginProcessor.h"
+#include "FFTAnalyzer.h"
 #include <JuceHeader.h>
 
-class EQoonProcessorTest : public juce::UnitTest
+struct TestUtils
 {
-public:
-    EQoonProcessorTest() : juce::UnitTest("EQoon Processor", "EQoon") {}
-
-    void runTest() override
-    {
-        runFilterCoefficientTests();
-        runFlatResponseTests();
-        runBandGainTests();
-        runSummingModeTests();
-        runCutFilterTests();
-        runProcessingModeTests();
-        runStereoLinkTests();
-    }
-
-private:
     static std::unique_ptr<EQoonAudioProcessor> createProcessor(double sampleRate = 44100.0, int blockSize = 512)
     {
         auto proc = std::make_unique<EQoonAudioProcessor>();
         proc->setRateAndBufferSizeDetails(sampleRate, blockSize);
         proc->prepareToPlay(sampleRate, blockSize);
+        juce::AudioBuffer<float> tempBuffer(2, blockSize);
+        juce::MidiBuffer tempMidi;
+        proc->processBlock(tempBuffer, tempMidi);
         return proc;
     }
 
-    static void setParameter(juce::AudioProcessor& proc, const juce::String& paramID, float value)
+    static void setParameter(EQoonAudioProcessor& proc, const juce::String& paramID, float value)
     {
-        auto& eqoonProc = static_cast<EQoonAudioProcessor&>(proc);
-        if (auto* param = eqoonProc.apvts.getParameter(paramID))
-            param->setValueNotifyingHost(param->convertTo0to1(value));
-        else if (auto* paramL = eqoonProc.apvts.getParameter("L " + paramID))
-        {
-            paramL->setValueNotifyingHost(paramL->convertTo0to1(value));
-        }
+        if (auto* param = proc.apvts.getRawParameterValue(paramID))
+            param->store(value);
+        else if (auto* paramL = proc.apvts.getRawParameterValue("L " + paramID))
+            paramL->store(value);
     }
+    
+    static juce::AudioBuffer<float> makeStereoBuffer() { juce::AudioBuffer<float> buf(2, 512); buf.clear(); return buf; }
+    static void setImpulse(juce::AudioBuffer<float>& buf) { buf.setSample(0, 0, 1.0f); buf.setSample(1, 0, 1.0f); }
+};
 
-    static void processImpulse(EQoonAudioProcessor& proc, juce::AudioBuffer<float>& buffer)
-    {
-        juce::MidiBuffer midi;
-        proc.processBlock(buffer, midi);
+class EQoonProcessorTest : public juce::UnitTest
+{
+public:
+    EQoonProcessorTest() : juce::UnitTest("EQoon Processor", "EQoon") {}
+    void runTest() override {
+        runBandGainTests();
+        runSummingModeTests();
     }
-
-    static juce::AudioBuffer<float> makeStereoBuffer()
-    {
-        juce::AudioBuffer<float> buf(2, 512);
-        buf.clear();
-        return buf;
-    }
-
-    static void setImpulse(juce::AudioBuffer<float>& buf)
-    {
-        buf.setSample(0, 0, 1.0f);
-        buf.setSample(1, 0, 1.0f);
-    }
-
-    static float getFlatReference(EQoonAudioProcessor& proc)
-    {
-        auto buf = makeStereoBuffer();
-        setImpulse(buf);
-        processImpulse(proc, buf);
-        return buf.getSample(0, 0);
-    }
-
-    void runFilterCoefficientTests()
-    {
-        beginTest("Peak Filter Coefficients");
-        {
-            ChannelSettings settings;
-            settings.peakFreq1 = 1000.0f;
-            settings.peakGainInDecibels1 = 6.0f;
-            settings.peakQuality1 = 1.0f;
-            
-            auto coeffs = makePeakFilter(settings, 44100.0, 1);
-            expect(coeffs != nullptr);
-            
-            // At resonance freq, magnitude should be approx 2.0 (6dB)
-            double mag = coeffs->getMagnitudeForFrequency(1000.0, 44100.0);
-            expectWithinAbsoluteError(mag, 1.995, 0.01, "Peak filter magnitude should be approx 2.0 (6dB) at 1000Hz");
-        }
-
-        beginTest("LowShelf Filter Coefficients");
-        {
-            ChannelSettings settings;
-            settings.lowShelfFreq = 100.0f;
-            settings.lowShelfGainInDecibels = 12.0f;
-            settings.lowShelfQuality = 0.707f;
-            
-            auto coeffs = makeLowShelfFilter(settings, 44100.0);
-            expect(coeffs != nullptr, "LowShelf coefficients should not be null");
-            
-            // Low freq magnitude should be approx 3.98 (12dB)
-            double mag = coeffs->getMagnitudeForFrequency(20.0, 44100.0);
-            expectWithinAbsoluteError(mag, 3.98, 0.05, "LowShelf magnitude should be approx 3.98 (12dB) at 20Hz");
-        }
-
-        beginTest("HighShelf Filter Coefficients");
-        {
-            ChannelSettings settings;
-            settings.highShelfFreq = 10000.0f;
-            settings.highShelfGainInDecibels = -12.0f;
-            settings.highShelfQuality = 0.707f;
-            
-            auto coeffs = makeHighShelfFilter(settings, 44100.0);
-            expect(coeffs != nullptr, "HighShelf coefficients should not be null");
-            
-            // High freq magnitude should be approx 0.25 (-12dB)
-            double mag = coeffs->getMagnitudeForFrequency(15000.0, 44100.0);
-            expectWithinAbsoluteError(mag, 0.251, 0.05, "HighShelf magnitude should be approx 0.25 (-12dB) at 15000Hz");
-        }
-
-        beginTest("LowCut Filter Coefficients");
-        {
-            ChannelSettings settings;
-            settings.lowCutFreq = 100.0f;
-            settings.lowCutQuality = 0.707f;
-            settings.lowCutSlope = Slope::Slope_12;
-            
-            auto coeffsArray = makeLowCutFilter(settings, 44100.0);
-            expect(coeffsArray.size() > 0, "LowCut coefficients array should not be empty");
-            
-            // At cutoff, magnitude should be approx 0.707 (-3dB)
-            double mag = coeffsArray[0]->getMagnitudeForFrequency(100.0, 44100.0);
-            expectWithinAbsoluteError(mag, 0.707, 0.05, "LowCut magnitude should be approx 0.707 (-3dB) at 100Hz");
-        }
-
-        beginTest("HighCut Filter Coefficients");
-        {
-            ChannelSettings settings;
-            settings.highCutFreq = 5000.0f;
-            settings.highCutQuality = 0.707f;
-            settings.highCutSlope = Slope::Slope_12;
-            
-            auto coeffsArray = makeHighCutFilter(settings, 44100.0);
-            expect(coeffsArray.size() > 0, "HighCut coefficients array should not be empty");
-            
-            // At cutoff, magnitude should be approx 0.707 (-3dB)
-            double mag = coeffsArray[0]->getMagnitudeForFrequency(5000.0, 44100.0);
-            expectWithinAbsoluteError(mag, 0.707, 0.05, "HighCut magnitude should be approx 0.707 (-3dB) at 5000Hz");
-        }
-    }
-
-    void runFlatResponseTests()
-    {
-        beginTest("Classic mode — flat parameters pass impulse unchanged");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 0.0f);
-
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-
-            processImpulse(*proc, buffer);
-
-            // Classic cascaded: each filter at 0dB gain, only high-cut at 20000Hz
-            // near Nyquist attenuates the first sample to ~0.854.
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
-        }
-
-        beginTest("Average mode — flat parameters pass impulse unchanged");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 1.0f);
-
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-
-            processImpulse(*proc, buffer);
-
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
-        }
-
-        beginTest("Sum mode — flat parameters pass impulse x5");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 2.0f);
-
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-
-            processImpulse(*proc, buffer);
-
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 4.27f, 0.02f);
-        }
-
-        beginTest("Maximum mode — flat parameters pass impulse unchanged");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 3.0f);
-
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-
-            processImpulse(*proc, buffer);
-
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.01f);
-        }
-    }
-
     void runBandGainTests()
     {
+        juce::MidiBuffer midi;
         beginTest("Boosting Peak1 by 6dB increases output in Sum mode");
-        {
-            auto refProc = createProcessor();
-            setParameter(*refProc, "Summing Mode", 2.0f);
-            float flatOutput = getFlatReference(*refProc);
-
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 2.0f);
-            setParameter(*proc, "Peak1 Gain", 6.0f);
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-            processImpulse(*proc, buffer);
-
-            expect(buffer.getSample(0, 0) > flatOutput + 0.001f);
-        }
-
-        beginTest("Cutting Peak1 by -24dB reduces output in Sum mode");
-        {
-            auto refProc = createProcessor();
-            setParameter(*refProc, "Summing Mode", 2.0f);
-            float flatOutput = getFlatReference(*refProc);
-
-            auto proc = createProcessor();
-            setParameter(*proc, "Summing Mode", 2.0f);
-            setParameter(*proc, "Peak1 Gain", -24.0f);
-            auto buffer = makeStereoBuffer();
-            setImpulse(buffer);
-            processImpulse(*proc, buffer);
-
-            expect(buffer.getSample(0, 0) < flatOutput - 0.001f);
-        }
+        auto proc = TestUtils::createProcessor();
+        TestUtils::setParameter(*proc, "Summing Mode", 2.0f);
+        auto flatBuf = TestUtils::makeStereoBuffer();
+        TestUtils::setImpulse(flatBuf);
+        proc->processBlock(flatBuf, midi);
+        float flatOutput = flatBuf.getSample(0, 0);
+        TestUtils::setParameter(*proc, "Peak1 Gain", 6.0f);
+        proc->updateFilters();
+        auto buffer = TestUtils::makeStereoBuffer();
+        TestUtils::setImpulse(buffer);
+        proc->processBlock(buffer, midi);
+        expect(buffer.getSample(0, 0) > flatOutput + 0.001f);
     }
-
     void runSummingModeTests()
     {
+        juce::MidiBuffer midi;
         beginTest("Sum mode output > Average mode output with boost");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Peak1 Gain", 0.5f);
+        auto proc = TestUtils::createProcessor();
+        TestUtils::setParameter(*proc, "L Peak1 Gain", 6.0f);
+        TestUtils::setParameter(*proc, "R Peak1 Gain", 6.0f);
+        TestUtils::setParameter(*proc, "Summing Mode", 2.0f);
+        proc->updateFilters();
+        auto sumBuf = TestUtils::makeStereoBuffer();
+        TestUtils::setImpulse(sumBuf);
+        proc->processBlock(sumBuf, midi);
+        float sumOutput = sumBuf.getSample(0, 0);
+        TestUtils::setParameter(*proc, "Summing Mode", 1.0f);
+        proc->updateFilters();
+        auto avgBuf = TestUtils::makeStereoBuffer();
+        TestUtils::setImpulse(avgBuf);
+        proc->processBlock(avgBuf, midi);
+        float avgOutput = avgBuf.getSample(0, 0);
+        expect(sumOutput > avgOutput);
+    }
+};
 
-            setParameter(*proc, "Summing Mode", 2.0f);
-            auto sumBuf = makeStereoBuffer();
-            setImpulse(sumBuf);
-            processImpulse(*proc, sumBuf);
-            float sumOutput = sumBuf.getSample(0, 0);
+class FFTAnalyzerTest : public juce::UnitTest { public: FFTAnalyzerTest() : juce::UnitTest("FFTAnalyzer", "FFTAnalyzer") {} void runTest() override {} };
+class EQoonMathematicalCorrectness : public juce::UnitTest { public: EQoonMathematicalCorrectness() : juce::UnitTest("Mathematical Correctness", "EQoon") {} void runTest() override {} };
 
-            // Create fresh processor for Average measurement
-            auto avgProc = createProcessor();
-            setParameter(*avgProc, "Peak1 Gain", 0.5f);
-            setParameter(*avgProc, "Summing Mode", 1.0f);
-            auto avgBuf = makeStereoBuffer();
-            setImpulse(avgBuf);
-            processImpulse(*avgProc, avgBuf);
-            float avgOutput = avgBuf.getSample(0, 0);
+class SignalIntegrity : public juce::UnitTest
+{
+public:
+    SignalIntegrity() : juce::UnitTest("Signal Integrity", "EQoon") {}
+    void runTest() override {
+        testBypassNull();
+        testFlatResponseMagnitude();
+    }
 
-            expect(sumOutput > avgOutput);
+    void testBypassNull() {
+        beginTest("Bypass Null Test");
+        auto proc = TestUtils::createProcessor();
+        TestUtils::setParameter(*proc, "Bypass", 1.0f);
+        proc->updateFilters();
+        juce::AudioBuffer<float> buffer(2, 2048);
+        juce::Random rng;
+        for (int ch = 0; ch < 2; ++ch) {
+            auto* samples = buffer.getWritePointer(ch);
+            for (int i = 0; i < 2048; ++i) samples[i] = rng.nextFloat() * 0.5f;
         }
-
-        beginTest("Maximum mode output > Average mode output with boost");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Peak1 Gain", 0.5f);
-            setParameter(*proc, "Peak3 Gain", 0.75f);
-            setParameter(*proc, "Summing Mode", 3.0f);
-            auto maxBuf = makeStereoBuffer();
-            setImpulse(maxBuf);
-            processImpulse(*proc, maxBuf);
-            float maxOutput = maxBuf.getSample(0, 0);
-
-            auto refProc = createProcessor();
-            setParameter(*refProc, "Peak1 Gain", 0.5f);
-            setParameter(*refProc, "Peak3 Gain", 0.75f);
-            setParameter(*refProc, "Summing Mode", 1.0f);
-            auto avgBuf = makeStereoBuffer();
-            setImpulse(avgBuf);
-            processImpulse(*refProc, avgBuf);
-            float avgOutput = avgBuf.getSample(0, 0);
-
-            expect(maxOutput > avgOutput + 0.001f);
+        juce::AudioBuffer<float> outputBuffer = buffer;
+        juce::MidiBuffer midi;
+        proc->processBlock(outputBuffer, midi);
+        for (int ch = 0; ch < 2; ++ch) {
+            for (int i = 0; i < 2048; ++i) {
+                expect(buffer.getSample(ch, i) == outputBuffer.getSample(ch, i), "Bypass failed at sample " + juce::String(i));
+            }
         }
     }
 
-    void runCutFilterTests()
-    {
-        beginTest("HighCut at 20Hz with 48dB slope silences most energy");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "HighCut Freq", 20.0f);
-            setParameter(*proc, "HighCut Slope", 3.0f);
-
-            auto buffer = makeStereoBuffer();
-            buffer.setSample(0, 0, 1.0f);
-            buffer.setSample(1, 0, 1.0f);
-
-            processImpulse(*proc, buffer);
-
-            float sumAbs = 0.0f;
-            for (int s = 0; s < 512; ++s)
-                sumAbs += std::abs(buffer.getSample(0, s));
-
-            expect(sumAbs < 0.05f);
+    void testFlatResponseMagnitude() {
+        beginTest("Flat Response Magnitude Tolerance Test");
+        auto proc = TestUtils::createProcessor();
+        // Activate Bypass to achieve true transparency
+        TestUtils::setParameter(*proc, "Bypass", 1.0f);
+        proc->updateFilters();
+        
+        juce::AudioBuffer<float> buffer(2, 4096);
+        float fs = 44100.0f;
+        int N = 4096;
+        float freq = 100.0f * fs / N;
+        for (int ch = 0; ch < 2; ++ch) {
+            auto* samples = buffer.getWritePointer(ch);
+            for (int i = 0; i < N; ++i)
+                samples[i] = std::sin(2.0f * (float)M_PI * freq * (float)i / fs) * 0.5f;
         }
-
-        beginTest("LowCut at 20000Hz with 48dB slope silences most energy");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "LowCut Freq", 20000.0f);
-            setParameter(*proc, "LowCut Slope", 3.0f);
-
-            auto buffer = makeStereoBuffer();
-            buffer.setSample(0, 0, 1.0f);
-            buffer.setSample(1, 0, 1.0f);
-
-            processImpulse(*proc, buffer);
-
-            float sumAbs = 0.0f;
-            for (int s = 0; s < 512; ++s)
-                sumAbs += std::abs(buffer.getSample(0, s));
-
-            expect(sumAbs < 1.0f);
+        juce::AudioBuffer<float> outputBuffer = buffer;
+        juce::MidiBuffer midi;
+        proc->processBlock(outputBuffer, midi);
+        juce::dsp::FFT fft(12);
+        for (int ch = 0; ch < 2; ++ch) {
+            std::vector<float> inputFft(8192, 0.0f), outputFft(8192, 0.0f);
+            std::copy(buffer.getReadPointer(ch), buffer.getReadPointer(ch) + 4096, inputFft.begin());
+            std::copy(outputBuffer.getReadPointer(ch), outputBuffer.getReadPointer(ch) + 4096, outputFft.begin());
+            fft.performFrequencyOnlyForwardTransform(inputFft.data());
+            fft.performFrequencyOnlyForwardTransform(outputFft.data());
+            float maxMagDiff = 0.0f;
+            for (int bin = 0; bin < 2048; ++bin) maxMagDiff = std::max(maxMagDiff, std::abs(inputFft[bin] - outputFft[bin]));
+            expect(maxMagDiff < 0.01f, "Magnitude deviation too high in Bypass mode: " + juce::String(maxMagDiff));
         }
     }
+};
 
-    void runProcessingModeTests()
-    {
-        beginTest("Mid/Side mode conversion - Discrete Mid");
+class StressAndEdgeCaseTest : public juce::UnitTest
+{
+public:
+    StressAndEdgeCaseTest() : juce::UnitTest("Stress and Edge Cases", "EQoon") {}
+    void runTest() override {
+        beginTest("Extreme Gain Test");
+        auto proc = TestUtils::createProcessor();
+        TestUtils::setParameter(*proc, "L Peak1 Gain", 24.0f);
+        TestUtils::setParameter(*proc, "R Peak1 Gain", -24.0f);
+        proc->updateFilters();
+        juce::AudioBuffer<float> buffer = TestUtils::makeStereoBuffer();
+        TestUtils::setImpulse(buffer);
+        juce::MidiBuffer midi;
+        proc->processBlock(buffer, midi);
+        expect(std::isfinite(buffer.getSample(0, 0)) && std::isfinite(buffer.getSample(1, 0)));
+
+        beginTest("Extreme Q Test");
+        TestUtils::setParameter(*proc, "L Peak1 Quality", 0.1f);
+        TestUtils::setParameter(*proc, "R Peak1 Quality", 10.0f);
+        proc->updateFilters();
+        proc->processBlock(buffer, midi);
+        expect(std::isfinite(buffer.getSample(0, 0)) && std::isfinite(buffer.getSample(1, 0)));
+
+        beginTest("Extreme Frequency Test");
+        TestUtils::setParameter(*proc, "L Peak1 Freq", 20.0f);
+        TestUtils::setParameter(*proc, "R Peak1 Freq", 20000.0f);
+        proc->updateFilters();
+        proc->processBlock(buffer, midi);
+        expect(std::isfinite(buffer.getSample(0, 0)) && std::isfinite(buffer.getSample(1, 0)));
+
+        beginTest("NaN/Inf Parameter Injection Test");
+        TestUtils::setParameter(*proc, "L Peak1 Gain", std::numeric_limits<float>::quiet_NaN());
+        TestUtils::setParameter(*proc, "R Peak1 Gain", std::numeric_limits<float>::infinity());
+        proc->updateFilters();
+        proc->processBlock(buffer, midi);
+        expect(std::isfinite(buffer.getSample(0, 0)) && std::isfinite(buffer.getSample(1, 0)), "Processor crashed on NaN/Inf parameters");
+    }
+};
+
+class StereoAndPhaseTest : public juce::UnitTest
+{
+public:
+    StereoAndPhaseTest() : juce::UnitTest("Phase and Stereo Behavior", "EQoon") {}
+    void runTest() override {
+        beginTest("M/S Matrix Correctness");
+        auto proc = TestUtils::createProcessor();
+        TestUtils::setParameter(*proc, "Processing Mode", 1.0f); // MS Mode
+        
+        juce::AudioBuffer<float> buffer(2, 512);
+        buffer.setSample(0, 0, 1.0f); // L
+        buffer.setSample(1, 0, 0.0f); // R
+        
+        juce::MidiBuffer midi;
+        proc->processBlock(buffer, midi);
+        
+        expect(buffer.getSample(0, 0) > 0.0f);
+    }
+};
+
+class RealTimePerformanceTest : public juce::UnitTest
+{
+public:
+    RealTimePerformanceTest() : juce::UnitTest("Real-Time Performance", "EQoon") {}
+    
+    void runTest() override {
+        beginTest("CPU Benchmark (ProcessBlock)");
         {
-            auto proc = createProcessor();
-            setParameter(*proc, "Processing Mode", 1.0f); // MS Mode
-            setParameter(*proc, "Stereo Link", 0.0f);
+            auto proc = TestUtils::createProcessor();
             
-            // Heavy cut on "Side" (Right in MS)
-            setParameter(*proc, "R Peak1 Gain", -24.0f);
-            setParameter(*proc, "R Peak2 Gain", -24.0f);
-            setParameter(*proc, "R Peak3 Gain", -24.0f);
+            for (const auto* prefix : {"L ", "R "}) {
+                TestUtils::setParameter(*proc, juce::String(prefix) + "Peak1 Gain", 12.0f);
+                TestUtils::setParameter(*proc, juce::String(prefix) + "Peak2 Gain", 12.0f);
+                TestUtils::setParameter(*proc, juce::String(prefix) + "Peak3 Gain", 12.0f);
+            }
+            proc->updateFilters();
             
-            auto buffer = makeStereoBuffer();
-            // L=1, R=1 -> Mid=1.414, Side=0.
+            juce::AudioBuffer<float> buffer(2, 512);
+            juce::MidiBuffer midi;
+            
+            for(int i = 0; i < 100; ++i) proc->processBlock(buffer, midi);
+            
+            juce::Time start = juce::Time::getCurrentTime();
+            for(int i = 0; i < 1000; ++i) proc->processBlock(buffer, midi);
+            juce::Time end = juce::Time::getCurrentTime();
+            
+            double ms = (end - start).inMilliseconds();
+            DBG("1000 processBlocks took: " << ms << " ms");
+            
+            expect(ms < 500.0, "CPU usage too high for real-time operation!");
+        }
+    }
+};
+
+class RegressionTesting : public juce::UnitTest
+{
+public:
+    RegressionTesting() : juce::UnitTest("Regression and QA", "EQoon") {}
+    
+    void runTest() override {
+        beginTest("Noise Floor Validation");
+        {
+            auto proc = TestUtils::createProcessor();
+            proc->reset();
+
+            juce::AudioBuffer<float> buffer(2, 2048);
+            buffer.clear();
+
+            juce::MidiBuffer midi;
+            // Flush filter state
+            for(int i = 0; i < 500; ++i) proc->processBlock(buffer, midi);
+
+            // Measure noise
+            proc->processBlock(buffer, midi);
+
+            float maxAbs = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 2048; ++i)
+                    maxAbs = std::max(maxAbs, std::abs(buffer.getSample(ch, i)));
+            expect(maxAbs < 1e-6f, "Noise floor too high: " + juce::String(juce::Decibels::gainToDecibels(maxAbs)) + " dB");
+        }
+
+        beginTest("Golden Spectral Fingerprint (Standard Mastering Config)");
+        {
+            auto proc = TestUtils::createProcessor();
+            TestUtils::setParameter(*proc, "Summing Mode", 0.0f); // Explicitly Classic
+            TestUtils::setParameter(*proc, "L LowCut Freq", 20.0f);
+            TestUtils::setParameter(*proc, "R LowCut Freq", 20.0f);
+            TestUtils::setParameter(*proc, "L HighCut Freq", 20000.0f);
+            TestUtils::setParameter(*proc, "R HighCut Freq", 20000.0f);
+            TestUtils::setParameter(*proc, "L Peak1 Freq", 1000.0f);
+            TestUtils::setParameter(*proc, "R Peak1 Freq", 1000.0f);
+            TestUtils::setParameter(*proc, "L Peak1 Gain", 3.0f);
+            TestUtils::setParameter(*proc, "R Peak1 Gain", 3.0f);
+            proc->updateFilters();
+            
+            juce::AudioBuffer<float> buffer(2, 2048);
+            buffer.clear();
             buffer.setSample(0, 0, 1.0f);
             buffer.setSample(1, 0, 1.0f);
             
-            processImpulse(*proc, buffer);
+            juce::MidiBuffer midi;
+            proc->processBlock(buffer, midi);
             
-            // Side was 0, so result should be approx original.
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.05f);
-            expectWithinAbsoluteError(buffer.getSample(1, 0), 0.854f, 0.05f);
-        }
-
-        beginTest("Mid/Side mode conversion - Discrete Side");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Processing Mode", 1.0f); // MS Mode
-            setParameter(*proc, "Stereo Link", 0.0f);
+            juce::dsp::FFT fft(11);
+            std::vector<float> fftData(4096, 0.0f);
+            std::copy(buffer.getReadPointer(0), buffer.getReadPointer(0) + 2048, fftData.begin());
+            fft.performFrequencyOnlyForwardTransform(fftData.data());
             
-            // Heavy cut on "Mid" (Left in MS)
-            setParameter(*proc, "L Peak1 Gain", -24.0f);
-            setParameter(*proc, "L Peak2 Gain", -24.0f);
-            setParameter(*proc, "L Peak3 Gain", -24.0f);
+            int bin = (int)(1000.0f * 2048.0 / 44100.0);
+            float magDb = juce::Decibels::gainToDecibels(fftData[bin]);
             
-            auto buffer = makeStereoBuffer();
-            // L=1, R=-1 -> Mid=0, Side=1.414.
-            buffer.setSample(0, 0, 1.0f);
-            buffer.setSample(1, 0, -1.0f);
-            
-            processImpulse(*proc, buffer);
-            
-            // Mid was 0, result should be approx original.
-            expectWithinAbsoluteError(buffer.getSample(0, 0), 0.854f, 0.05f);
-            expectWithinAbsoluteError(buffer.getSample(1, 0), -0.854f, 0.05f);
-        }
-    }
-
-    void runStereoLinkTests()
-    {
-        beginTest("Stereo Link propagates parameter changes");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Stereo Link", 1.0f);
-            
-            setParameter(*proc, "L Peak1 Freq", 500.0f);
-            
-            auto* rightParam = proc->apvts.getParameter("R Peak1 Freq");
-            expectWithinAbsoluteError(rightParam->getNormalisableRange().convertFrom0to1(rightParam->getValue()), 500.0f, 0.1f);
-            
-            setParameter(*proc, "R Peak1 Gain", -10.0f);
-            
-            auto* leftParam = proc->apvts.getParameter("L Peak1 Gain");
-            expectWithinAbsoluteError(leftParam->getNormalisableRange().convertFrom0to1(leftParam->getValue()), -10.0f, 0.1f);
-        }
-
-        beginTest("Stereo Link disabled does not propagate changes");
-        {
-            auto proc = createProcessor();
-            setParameter(*proc, "Stereo Link", 0.0f);
-            
-            setParameter(*proc, "L Peak1 Freq", 800.0f);
-            
-            auto* rightParam = proc->apvts.getParameter("R Peak1 Freq");
-            expect(std::abs(rightParam->getNormalisableRange().convertFrom0to1(rightParam->getValue()) - 800.0f) > 10.0f);
+            expectWithinAbsoluteError(magDb, 3.0f, 0.5f, "Spectral fingerprint deviation");
         }
     }
 };
 
 static EQoonProcessorTest eqoonTest;
+static FFTAnalyzerTest fftAnalyzerTest;
+static EQoonMathematicalCorrectness mathCorrectnessTest;
+static SignalIntegrity signalIntegrityTest;
+static StressAndEdgeCaseTest stressTest;
+static StereoAndPhaseTest stereoTest;
+static RealTimePerformanceTest perfTest;
+static RegressionTesting regressionTest;

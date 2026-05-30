@@ -49,6 +49,7 @@ private:
 
     bool mouseOver { false };
     int mouseX { 0 };
+    juce::Path responseCurve;
 };
 
 class EQoonAudioProcessorEditor : public juce::AudioProcessorEditor
@@ -139,10 +140,10 @@ private:
     std::unique_ptr<Attachment> highShelfFreqSliderAttachment, highShelfGainSliderAttachment, highShelfQualitySliderAttachment;
     std::unique_ptr<Attachment> highCutFreqSliderAttachment, highCutSlopeSliderAttachment, highCutQualitySliderAttachment;
     
-    Attachment makeupGainSliderAttachment;
-    juce::AudioProcessorValueTreeState::ComboBoxAttachment summingModeAttachment;
-    juce::AudioProcessorValueTreeState::ComboBoxAttachment processingModeAttachment;
-    juce::AudioProcessorValueTreeState::ButtonAttachment stereoLinkAttachment;
+    std::unique_ptr<Attachment> makeupGainSliderAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> summingModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> stereoLinkAttachment;
 
     juce::TextButton leftMidButton, rightSideButton;
     juce::ToggleButton linkButton;

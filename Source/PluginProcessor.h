@@ -45,6 +45,7 @@ struct ChainSettings
     SummingMode summingMode { Summing_Classic };
     ProcessingMode processingMode { Processing_LR };
     bool stereoLink { true };
+    bool bypass { false };
 };
 
 ChainSettings getChainSettings(juce::AudioProcessorValueTreeState& apvts);
@@ -257,9 +258,13 @@ private:
     void updateHighShelfFilter(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
     void updateLowCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
     void updateHighCutFilters(const ChannelSettings& leftSettings, const ChannelSettings& rightSettings);
-    void updateFilters();
     
 public:
+    //==============================================================================
+    void reset();
+
+    void updateFilters();
+
     // For FFT analysis
     void getPreEQFFTData(float* fftData, int numBins, float sampleRate) {
         if (preEQAnalyzer) {

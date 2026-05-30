@@ -47,3 +47,5 @@ The project includes a console-based test runner.
 - `CMakeLists.txt`: Build configuration for the test runner.
 - `EQoon.jucer`: Main Projucer project configuration.
 - `JuceLibraryCode/`: The JUCE sourcecode. Your reference point for the JUCE documentation, check the Headerfiles.
+
+Do not use any emojis. Ever.

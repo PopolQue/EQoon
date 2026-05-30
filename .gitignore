@@ -9,3 +9,5 @@ install.sh
 **/build_test
 **/build
 default.profraw
+.venv
+tests/plots

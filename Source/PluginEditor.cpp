@@ -356,42 +356,43 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     calculateMags(leftChain, leftMags);
     calculateMags(rightChain, rightMags);
 
-    auto drawCurve = [&](const std::vector<double>& mags, juce::Colour colour, float thickness, float alpha)
+    juce::Path responseCurve;
+    auto drawCurve = [&](const std::vector<double>& mags, juce::Colour colour, float thickness, float alpha, juce::Path& path)
     {
-        Path responseCurve;
+        path.clear();
         const double outputMin = responseArea.getBottom();
         const double outputMax = responseArea.getY();
         auto map = [outputMin, outputMax](double input) {
             return jmap(input, -24.0, 24.0, outputMin, outputMax);
         };
 
-        responseCurve.startNewSubPath(responseArea.getX(), map(mags.front()));
+        path.startNewSubPath(responseArea.getX(), map(mags.front()));
         for (size_t i = 1; i < mags.size(); ++i) {
-            responseCurve.lineTo(responseArea.getX() + i, map(mags[i]));
+            path.lineTo(responseArea.getX() + i, map(mags[i]));
         }
 
         g.setColour(colour.withAlpha(alpha));
-        g.strokePath(responseCurve, PathStrokeType(thickness));
+        g.strokePath(path, PathStrokeType(thickness));
     };
 
-    drawCurve(leftMags, juce::Colours::white, 2.5f, 1.0f);
-    drawCurve(rightMags, juce::Colours::yellow, 1.5f, 0.6f);
+    // Use a path for drawing
+    juce::Path leftPath, rightPath;
+    drawCurve(leftMags, juce::Colours::white, 2.5f, 1.0f, leftPath);
+    drawCurve(rightMags, juce::Colours::yellow, 1.5f, 0.6f, rightPath);
 
     // Draw the response curve with a glow effect
     g.setColour(Colours::aqua);
     g.drawRoundedRectangle(responseArea.toFloat(), 4.f, 1.f);
     
-    // Draw the main curve with a glow effect
+    // Use the combined or individual path
     g.setColour(Colours::white);
-    g.strokePath(responseCurve, PathStrokeType(2.5f));
+    g.strokePath(leftPath, PathStrokeType(2.5f));
     
-    // Add a subtle glow around the curve
     g.setColour(Colours::cyan.withAlpha(0.3f));
-    g.strokePath(responseCurve, PathStrokeType(4.0f));
+    g.strokePath(leftPath, PathStrokeType(4.0f));
     
-    // Add a highlight on top of the curve
     g.setColour(Colours::white.withAlpha(0.8f));
-    g.strokePath(responseCurve, PathStrokeType(1.0f));
+    g.strokePath(leftPath, PathStrokeType(1.0f));
     
     // Mouse tracking line and frequency caption
     if (mouseOver)
@@ -437,16 +438,22 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
 
 EQoonAudioProcessorEditor::EQoonAudioProcessorEditor(EQoonAudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p),
-      responseCurveComponent(audioProcessor),
-        makeupGainSliderAttachment(audioProcessor.apvts, "Makeup Gain", makeupGainSlider),
-        summingModeAttachment(audioProcessor.apvts, "Summing Mode", summingModeCombo),
-        processingModeAttachment(audioProcessor.apvts, "Processing Mode", processingModeCombo),
-        stereoLinkAttachment(audioProcessor.apvts, "Stereo Link", linkButton)
+      responseCurveComponent(audioProcessor)
 {
+    // Initialize attachments AFTER buttons are initialized
+    makeupGainSliderAttachment = std::make_unique<Attachment>(audioProcessor.apvts, "Makeup Gain", makeupGainSlider);
+    summingModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "Summing Mode", summingModeCombo);
+    processingModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "Processing Mode", processingModeCombo);
+    stereoLinkAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(audioProcessor.apvts, "Stereo Link", linkButton);
+
     leftMidButton.setButtonText("Left / Mid");
     rightSideButton.setButtonText("Right / Side");
     linkButton.setButtonText("Link");
     
+    // Add buttons to a group
+    leftMidButton.setRadioGroupId(1);
+    rightSideButton.setRadioGroupId(1);
+
     leftMidButton.onClick = [this] { currentChannelView = Left_Mid; updateAttachments(); updateButtonStates(); };
     rightSideButton.onClick = [this] { currentChannelView = Right_Side; updateAttachments(); updateButtonStates(); };
 
